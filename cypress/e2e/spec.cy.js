@@ -1,6 +1,6 @@
 context("GET /resorts", () => {
   it("gets a list of resorts", () => {
-    //Make a GET request to the /users endpoint
+    //Make a GET request to the /resorts endpoint
     cy.request("GET", "http://localhost:3000/resorts").then((response) => {
       //Check that the response status is 200
       expect(response.status).to.eq(200)
