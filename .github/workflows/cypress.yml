@@ -1,0 +1,27 @@
+name: Cypress E2E Tests
+
+on: [push]
+
+jobs:
+    cypress-run:
+        runs-on: ubuntu-latest
+        name: Run Cypress Tests
+        env: 
+            MONGODB_URI: ${{ secrets.MONGODB_URI }}
+            PORT: ${{ vars.PORT }}
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                    node-version: '18'
+            - name: Install dependencies
+              run: |
+                    npm install
+            - name: Start the API server
+              run: |
+                    node app.js &
+                    sleep 10
+            - name: Run Cypress tests
+              uses: cypress-io/github-action@v6
