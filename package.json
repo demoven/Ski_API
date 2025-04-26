@@ -4,5 +4,8 @@
     "express": "^5.1.0",
     "mongodb": "^6.15.0",
     "mongoose": "^8.13.2"
+  },
+  "devDependencies": {
+    "cypress": "^14.3.2"
   }
 }
