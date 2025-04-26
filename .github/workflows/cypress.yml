@@ -19,12 +19,9 @@ jobs:
             - name: Install dependencies
               run: |
                     npm install
-                    npm install wait-on --save-dev
             - name: Start the API server
               run: |
                     node app.js &
-            - name: Wait for API server to be ready
-              run: |
-                    npx wait-on http://localhost:${{ vars.PORT }}
+                    sleep 10
             - name: Run Cypress tests
               uses: cypress-io/github-action@v6
