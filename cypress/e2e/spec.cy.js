@@ -17,7 +17,7 @@ context("GET /resorts", () => {
 })
 
 context("POST & DELETE /resorts", () => {
-  it("creates and deletes a resorts", () => {
+  it("creates and deletes a resort", () => {
     const newResort = {
       name: "Test Resort",
       location: "Test Location",
