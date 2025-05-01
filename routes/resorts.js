@@ -49,6 +49,31 @@ router.get('/names', async (req, res) => {
   }
 });
 
+//GET: Retrieve a ski resort by name
+router.get('/:name', async (req, res) => {
+  try {
+    //Connect to the database
+    const db = getDatabase('France');
+
+    //Access the collection
+    const collection = db.collection('ski_resorts');
+
+    //Find the resort by name
+    const resort = await collection.findOne({ name: req.params.name });
+
+    //Check if the resort was found
+    if (!resort) {
+      return res.status(404).json({ error: "Resort not found" });
+    }
+
+    //Send the resort as a JSON response with a 200 status code
+    res.status(200).json(resort);
+  } catch (error) {
+    //Send a 500 status code for any errors that occur
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
 //POST: Add a new ski resort
 router.post('/', async (req, res) => {
   try {
