@@ -25,6 +25,30 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET: Retrieve only the names of all ski resorts
+router.get('/names', async (req, res) => {
+  try {
+    // Connect to the database
+    const db = getDatabase('France');
+
+    // Access the collection
+    const collection = db.collection('ski_resorts');
+
+    // Find all resorts in the collection and project only the name field
+    const resortsWithId = await collection.find({}, { projection: { name: 1 } }).toArray();
+    
+    // Extract only the names from the result objects
+    const resortNames = resortsWithId.map(resort => resort.name);
+
+    // Send just the array of names as a JSON response
+    res.status(200).json(resortNames);
+
+  } catch (error) {
+    // Send a 500 status code for any errors that occur
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
 //POST: Add a new ski resort
 router.post('/', async (req, res) => {
   try {
@@ -35,61 +59,66 @@ router.post('/', async (req, res) => {
     const collection = db.collection('ski_resorts');
 
     //Check if the resort already exists in the collection
+    const isString = value => typeof value === 'string';
+    const isNumber = value => typeof value === 'number';
+    const isArray = Array.isArray;
+    const isObject = value => value && typeof value === 'object';
+    
     const resort = {
       _id: new ObjectId(),
-      name: req.body.name,
-      slopes: Array.isArray(req.body.slopes)
+      name: isString(req.body.name) ? req.body.name : "Unnamed resort",
+      slopes: isArray(req.body.slopes)
         ? req.body.slopes.map(slope => ({
-          _id: new ObjectId(),
-          name: slope.name,
-          elevation: slope.elevation,
-          difficulty: slope.difficulty,
-          listCoordinates: Array.isArray(slope.listCoordinates)
-            ? slope.listCoordinates.map(coord => ({
-              _id: new ObjectId(),
-              lat: coord.lat,
-              lng: coord.lng,
-            }))
-            : [],
-
-          intersections: Array.isArray(slope.intersections)
-            ? slope.intersections.map(intersection => ({
-              _id: new ObjectId(),
-              name: intersection.name,
-              listCoordinates: Array.isArray(intersection.listCoordinates)
-                ? intersection.listCoordinates.map(coord => ({
+            _id: new ObjectId(),
+            name: isString(slope.name) ? slope.name : "Unnamed slope",
+            elevation: isNumber(slope.elevation) ? slope.elevation : 0,
+            difficulty: isString(slope.difficulty) ? slope.difficulty : "unknown",
+            listCoordinates: isArray(slope.listCoordinates)
+              ? slope.listCoordinates
+                  .filter(coord => isObject(coord) && isNumber(coord.lat) && isNumber(coord.lng))
+                  .map(coord => ({
+                    _id: new ObjectId(),
+                    lat: coord.lat,
+                    lng: coord.lng,
+                  }))
+              : [],
+            intersections: isArray(slope.intersections)
+              ? slope.intersections.map(intersection => ({
                   _id: new ObjectId(),
-                  lat: coord.lat,
-                  lng: coord.lng,
+                  name: isString(intersection.name) ? intersection.name : "Unnamed intersection",
+                  coordinates: isArray(intersection.coordinates)
+                    ? intersection.coordinates
+                        .filter(coord => isObject(coord) && isNumber(coord.lat) && isNumber(coord.lng))
+                        .map(coord => ({
+                          _id: new ObjectId(),
+                          lat: coord.lat,
+                          lng: coord.lng,
+                        }))
+                    : [],
                 }))
-                : [],
-            }))
-            : [],
-            reviews: Array.isArray(slope.reviews)
-            ? slope.reviews.map(review => ({
-              _id: new ObjectId(),
-              name: review.name,
-              rating: review.rating,
-              comment: review.comment,
-            }))
-            : [],
-        })) : [],
-
-      lifts: Array.isArray(req.body.lifts)
+              : [],
+          }))
+        : [],
+      lifts: isArray(req.body.lifts)
         ? req.body.lifts.map(lift => ({
-          _id: new ObjectId(),
-          name: lift.name,
-          start: {
             _id: new ObjectId(),
-            lat: lift.start.lat,
-            lng: lift.start.lng,
-          },
-          end: {
-            _id: new ObjectId(),
-            lat: lift.end.lat,
-            lng: lift.end.lng,
-          }
-        })) : [],
+            name: isString(lift.name) ? lift.name : "Unnamed lift",
+            start: isObject(lift.start) && isNumber(lift.start.lat) && isNumber(lift.start.lng)
+              ? {
+                  _id: new ObjectId(),
+                  lat: lift.start.lat,
+                  lng: lift.start.lng,
+                }
+              : null,
+            end: isObject(lift.end) && isNumber(lift.end.lat) && isNumber(lift.end.lng)
+              ? {
+                  _id: new ObjectId(),
+                  lat: lift.end.lat,
+                  lng: lift.end.lng,
+                }
+              : null,
+          }))
+        : [],
     };
 
     //Insert the new resort into the collection
@@ -132,8 +161,7 @@ router.delete('/:name', async (req, res) => {
     //Send a success message as a JSON response with a 200 status code
     res.status(200).json({ message: "Resort deleted successfully" });
   } catch (error) {
-
-    //Send a 500 status code for any errors that occur
+    //Handle any errors that occur during the deletion process
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
