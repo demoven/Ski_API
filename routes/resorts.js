@@ -107,19 +107,17 @@ router.post('/', async (req, res) => {
                     lng: coord.lng,
                   }))
               : [],
-            intersections: isArray(slope.intersections)
+              intersections: isArray(slope.intersections)
               ? slope.intersections.map(intersection => ({
                   _id: new ObjectId(),
                   name: isString(intersection.name) ? intersection.name : "Unnamed intersection",
-                  coordinates: isArray(intersection.coordinates)
-                    ? intersection.coordinates
-                        .filter(coord => isObject(coord) && isNumber(coord.lat) && isNumber(coord.lng))
-                        .map(coord => ({
-                          _id: new ObjectId(),
-                          lat: coord.lat,
-                          lng: coord.lng,
-                        }))
-                    : [],
+                  coordinates: isObject(intersection.coordinates) && isNumber(intersection.coordinates.lat) && isNumber(intersection.coordinates.lng)
+                    ? {
+                        _id: new ObjectId(),
+                        lat: intersection.coordinates.lat,
+                        lng: intersection.coordinates.lng,
+                      }
+                    : null,
                 }))
               : [],
           }))

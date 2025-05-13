@@ -16,7 +16,9 @@ const startServer = async () => {
     app.use('/resorts', resortsRoutes);
 
     // Start the server
-    app.listen(PORT, () => {
+
+    // Remove the 0.0.0.0 after development
+    app.listen(PORT, '0.0.0.0', () => {
       console.log(`Server is running on port ${PORT}`);
     });
   } catch (error) {
