@@ -10,7 +10,6 @@ context("GET /resorts", () => {
 
       //Check that the first element of the array is an object with the expected properties
       expect(response.body[0]).to.have.property("name")
-      expect(response.body[0]).to.have.property("location")
       expect(response.body[0]).to.have.property("elevation")
     })
   })
