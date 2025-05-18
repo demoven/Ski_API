@@ -58,7 +58,17 @@ app.get('/', async (req, res) => {
       });
     }
     
-    res.json({ user: userData });
+    // Filter user data to include only fields that match question keys
+    const relevantUserData = {};
+    if (userData && questions) {
+      Object.keys(questions).forEach(questionKey => {
+        if (questionKey in userData) {
+          relevantUserData[questionKey] = userData[questionKey];
+        }
+      });
+    }
+    
+    res.json(relevantUserData);
   } catch (error) {
     handleError(res, 'Erreur serveur', error);
   }
@@ -67,16 +77,16 @@ app.get('/', async (req, res) => {
 // Add a new question
 app.post('/questions/create', async (req, res) => {
   try {
-    const { element: keyElement, question, reponses, type } = req.body;
+    const { element: keyElement, question, answers, type } = req.body;
     
-    if (!keyElement || !question || !reponses || !type) {
+    if (!keyElement || !question || !answers || !type) {
       return res.status(400).json({ error: 'Données manquantes' });
     }
 
     const exists = await getDbData(`questions/${keyElement}`);
     if (exists) return res.status(400).json({ error: 'La question existe déjà' });
     
-    await db.ref(`questions/${keyElement}`).set({ question, reponses, type });
+    await db.ref(`questions/${keyElement}`).set({ question, answers, type });
     res.json({ message: 'Question ajoutée avec succès' });
   } catch (error) {
     handleError(res, "Erreur lors de l'ajout de la question", error);
@@ -107,7 +117,7 @@ app.post('/preferences', async (req, res) => {
         if (key in questions) {
           // Validate value based on question type
           const questionType = questions[key].type;
-          const questionResponses = questions[key].reponses;
+          const questionResponses = questions[key].answers;
           let isValid = true;
           
           switch (questionType) {
@@ -173,10 +183,10 @@ app.put('/questions/update/:element', async (req, res) => {
     const question = await getDbData(`questions/${element}`);
     if (!question) return res.status(404).json({ error: 'Question non trouvée' });
     
-    const { question: q, reponses, type } = req.body;
+    const { question: q, answers, type } = req.body;
     const updateData = {};
     if (q) updateData.question = q;
-    if (reponses) updateData.reponses = reponses;
+    if (answers) updateData.answers = answers;
     if (type) updateData.type = type;
     
     await db.ref(`questions/${element}`).update(updateData);
@@ -191,7 +201,7 @@ function compare(user, questionList, userUid) {
   const ref = db.ref('users').child(userUid);
   
   questionList.forEach(question => {
-    const { element: questionKey, type: questionType, reponses } = question;
+    const { element: questionKey, type: questionType, answers } = question;
     
     // Check if question exists in user profile
     if (!user || !(questionKey in user)) {
@@ -209,11 +219,11 @@ function compare(user, questionList, userUid) {
       case 'date': isValid = !isNaN(Date.parse(userResponse)); break;
       case 'bool': isValid = typeof userResponse === 'boolean'; break;
       case 'radio': 
-        isValid = Array.isArray(reponses) && reponses.includes(userResponse); 
+        isValid = Array.isArray(answers) && answers.includes(userResponse); 
         break;
       case 'checkbox': 
-        isValid = Array.isArray(userResponse) && Array.isArray(reponses) && 
-                 userResponse.every(item => reponses.includes(item));
+        isValid = Array.isArray(userResponse) && Array.isArray(answers) && 
+                 userResponse.every(item => answers.includes(item));
         break;
     }
     
