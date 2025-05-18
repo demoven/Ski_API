@@ -2,6 +2,7 @@ const express = require('express');
 const { connectToDatabase } = require('./services/database');
 const resortsRoutes = require('./routes/resorts');
 
+
 const app = express();
 app.use(express.json());
 
@@ -13,12 +14,12 @@ const startServer = async () => {
     console.log("Connected to MongoDB Atlas");
 
     // Use the comments routes
-    app.use('/resorts', resortsRoutes);
+    app.use('/', resortsRoutes);
 
     // Start the server
 
     // Remove the 0.0.0.0 after development
-    app.listen(PORT, '0.0.0.0', () => {
+    app.listen(PORT, '127.0.0.1', () => {
       console.log(`Server is running on port ${PORT}`);
     });
   } catch (error) {

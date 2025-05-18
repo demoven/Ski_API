@@ -1,8 +1,49 @@
 const express = require('express');
 const { getDatabase } = require('../services/database');
 const { ObjectId } = require('mongodb');
+const admin = require('firebase-admin');
+const serviceAccount = require('../firebase-service-account.json');
+const dotenv = require('dotenv');
+dotenv.config();
 
 const router = express.Router();
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: process.env.FIREBASE_URL
+});
+
+
+async function isAdmin(req, res, next) {
+  try {
+    const userUid = req.headers['x-uid'];
+    
+    if (!userUid) {
+      return res.status(401).json({ error: "Authentification requise. UID manquant dans l'en-tête" });
+    }
+    
+    // Récupérer les informations de l'utilisateur, y compris les custom claims
+    const userRecord = await admin.auth().getUser(userUid);
+    
+    // Vérifier si l'utilisateur a le custom claim 'admin'
+    if (userRecord.customClaims && userRecord.customClaims.admin === true) {
+      // L'utilisateur est admin, continuer vers la route
+      next();
+    } else {
+      // L'utilisateur n'est pas admin
+      return res.status(403).json({ 
+        error: "Accès refusé", 
+        message: "Vous n'avez pas les droits d'administration nécessaires"
+      });
+    }
+  } catch (error) {
+    console.error("Erreur lors de la vérification des droits d'administration:", error);
+    return res.status(500).json({ 
+      error: "Erreur serveur",
+      message: "Impossible de vérifier les droits d'administration"
+    });
+  }
+}
 
 //GET: Retrieve all ski resorts
 router.get('/', async (req, res) => {
@@ -75,7 +116,7 @@ router.get('/:name', async (req, res) => {
 });
 
 //POST: Add a new ski resort
-router.post('/', async (req, res) => {
+router.post('/',isAdmin, async (req, res) => {
   try {
     //Connect to the database
     const db = getDatabase('France');
@@ -165,7 +206,7 @@ router.post('/', async (req, res) => {
 });
 
 //DELETE: Delete a ski resort by name
-router.delete('/:name', async (req, res) => {
+router.delete('/:name',isAdmin, async (req, res) => {
   try {
     //Connect to the database
     const db = getDatabase('France');
@@ -190,7 +231,7 @@ router.delete('/:name', async (req, res) => {
 });
 
 //DELETE: Delete a ski resort by ID
-router.delete('/id/:id', async (req, res) => {
+router.delete('/id/:id',isAdmin, async (req, res) => {
   try {
     //Connect to the database
     const db = getDatabase('France');

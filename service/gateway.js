@@ -32,7 +32,7 @@ async function verifyToken(req, res, next) {
 }
 
 // Appliquer le middleware de vérification à toutes les routes commençant par /users ou /products
-app.use(['/profile', '/products'], verifyToken);
+app.use(['/profile', '/resorts'], verifyToken);
 
 // Proxy vers user-service
 app.use('/profile', createProxyMiddleware({
@@ -47,11 +47,24 @@ app.use('/profile', createProxyMiddleware({
   }
 }));
 
+// Proxy vers user-service
+app.use('/resorts', createProxyMiddleware({
+  target: process.env.RESORT_SERVICE || 'http://localhost:8082',
+  changeOrigin: true,
+  pathRewrite: { '^/resorts': '' },
+  onProxyReq: (proxyReq, req, res) => {
+    // Ajouter l'UID à l'en-tête de la requête proxy
+    if (req.userUid) {
+      proxyReq.setHeader('x-uid', req.userUid);
+    }
+  }
+}));
+
 // Catch-all pour les routes non définies
 app.use('*', (req, res) => {
   res.status(404).json({ message: 'Route non trouvée sur la gateway' });
 });
 
-app.listen(PORT, '127.0.0.1', () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`API Gateway démarrée sur http://127.0.0.1:${PORT}`);
 });
