@@ -32,6 +32,37 @@ const getDbData = (path) => {
   });
 };
 
+async function isAdmin(req, res, next) {
+  try {
+    const userUid = req.headers['x-uid'];
+    
+    if (!userUid) {
+      return res.status(401).json({ error: "Authentification requise. UID manquant dans l'en-tête" });
+    }
+    
+    // Récupérer les informations de l'utilisateur, y compris les custom claims
+    const userRecord = await admin.auth().getUser(userUid);
+    
+    // Vérifier si l'utilisateur a le custom claim 'admin'
+    if (userRecord.customClaims && userRecord.customClaims.admin === true) {
+      // L'utilisateur est admin, continuer vers la route
+      next();
+    } else {
+      // L'utilisateur n'est pas admin
+      return res.status(403).json({ 
+        error: "Accès refusé", 
+        message: "Vous n'avez pas les droits d'administration nécessaires"
+      });
+    }
+  } catch (error) {
+    console.error("Erreur lors de la vérification des droits d'administration:", error);
+    return res.status(500).json({ 
+      error: "Erreur serveur",
+      message: "Impossible de vérifier les droits d'administration"
+    });
+  }
+}
+
 // Routes
 app.get('/', async (req, res) => {
   const userUid = req.headers['x-uid'];
@@ -75,7 +106,7 @@ app.get('/', async (req, res) => {
 });
 
 // Add a new question
-app.post('/questions/create', async (req, res) => {
+app.post('/questions/create', isAdmin, async (req, res) => {
   try {
     const { element: keyElement, question, answers, type } = req.body;
     
@@ -158,7 +189,7 @@ app.post('/preferences', async (req, res) => {
 });
 
 // Delete a question
-app.delete('/questions/delete/:element', async (req, res) => {
+app.delete('/questions/delete/:element',isAdmin, async (req, res) => {
   try {
     const { element } = req.params;
     if (!element) return res.status(400).json({ error: 'Element non spécifié' });
@@ -174,7 +205,7 @@ app.delete('/questions/delete/:element', async (req, res) => {
 });
 
 // Update a question
-app.put('/questions/update/:element', async (req, res) => {
+app.put('/questions/update/:element',isAdmin, async (req, res) => {
   try {
     const { element } = req.params;
     if (!element) return res.status(400).json({ error: 'Element non spécifié' });
