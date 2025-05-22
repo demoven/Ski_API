@@ -132,24 +132,24 @@ router.post('/',isAdmin, async (req, res) => {
     
     const resort = {
       _id: new ObjectId(),
-      name: isString(req.body.name) ? req.body.name : "Unnamed resort",
+      name: isString(req.body.station) ? req.body.station : "Unnamed resort",
       slopes: isArray(req.body.slopes)
         ? req.body.slopes.map(slope => ({
             _id: new ObjectId(),
-            name: isString(slope.name) ? slope.name : "Unnamed slope",
-            elevation: isNumber(slope.elevation) ? slope.elevation : 0,
-            difficulty: isString(slope.difficulty) ? slope.difficulty : "unknown",
-            listCoordinates: isArray(slope.listCoordinates)
+            name: isString(slope.nom) ? slope.nom : "Unnamed slope",
+            elevation: isNumber(slope.altitude_depart) ? slope.altitude_depart : 0,
+            difficulty: isString(slope.difficulte) ? slope.difficulte : "unknown",
+            listCoordinates: isArray(slope.gps_coords)
               ? slope.listCoordinates
                   .filter(coord => isObject(coord) && isNumber(coord.lat) && isNumber(coord.lng))
                   .map(coord => ({
                     _id: new ObjectId(),
-                    lat: coord.lat,
-                    lng: coord.lng,
+                    lat: coord[1],
+                    lng: coord[0],
                   }))
               : [],
-              intersections: isArray(slope.intersections)
-              ? slope.intersections.map(intersection => ({
+              intersections: isArray(slope.connexions)
+              ? slope.connextions.map(intersection => ({
                   _id: new ObjectId(),
                   name: isString(intersection.name) ? intersection.name : "Unnamed intersection",
                   coordinates: isObject(intersection.coordinates) && isNumber(intersection.coordinates.lat) && isNumber(intersection.coordinates.lng)

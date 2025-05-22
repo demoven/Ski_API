@@ -89,3 +89,4 @@ typings/
 
 token.js
 firebase-service-account.json
+token_admin.js

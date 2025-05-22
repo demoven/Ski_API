@@ -32,7 +32,7 @@ async function verifyToken(req, res, next) {
 }
 
 // Appliquer le middleware de vérification à toutes les routes commençant par /users ou /products
-app.use(['/profile', '/resorts'], verifyToken);
+app.use(['/profile', '/resorts', '/reviews'], verifyToken);
 
 // Proxy vers user-service
 app.use('/profile', createProxyMiddleware({
@@ -52,6 +52,19 @@ app.use('/resorts', createProxyMiddleware({
   target: process.env.RESORT_SERVICE || 'http://localhost:8082',
   changeOrigin: true,
   pathRewrite: { '^/resorts': '' },
+  onProxyReq: (proxyReq, req, res) => {
+    // Ajouter l'UID à l'en-tête de la requête proxy
+    if (req.userUid) {
+      proxyReq.setHeader('x-uid', req.userUid);
+    }
+  }
+}));
+
+// Proxy vers user-service
+app.use('/reviews', createProxyMiddleware({
+  target: process.env.REVIEWS_SERVICE || 'http://localhost:8083',
+  changeOrigin: true,
+  pathRewrite: { '^/reviews': '' },
   onProxyReq: (proxyReq, req, res) => {
     // Ajouter l'UID à l'en-tête de la requête proxy
     if (req.userUid) {
