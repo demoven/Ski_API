@@ -64,34 +64,24 @@ async function isAdmin(req, res, next) {
     }
 }
 
-async function getUserPreferences(userUid) {
+// Fonction utilitaire pour récupérer les préférences utilisateur
+async function getUserProfile(userUid) {
   try {
-    // Utilisez l'URL de la gateway pour accéder au profile-service
-    const gatewayUrl = process.env.GATEWAY_URL || 'http://localhost:8080';
-    const response = await axios.get(`${gatewayUrl}/profile`, {
+    // URL du service de profil (en local)
+    const profileServiceUrl = process.env.PROFILE_SERVICE_URL || 'http://localhost:8081';
+    
+    // Faire la requête avec l'en-tête UID
+    const response = await axios.get(profileServiceUrl, {
       headers: {
-        'Authorization': `Bearer ${await getServiceToken()}`,
         'x-uid': userUid
       }
     });
+    
     return response.data;
   } catch (error) {
-    console.error('Erreur lors de la récupération des préférences utilisateur:', error.message);
+    console.error("Erreur lors de la récupération du profil utilisateur:", error.message);
+    // Retourner null ou un objet vide en cas d'erreur
     return null;
-  }
-}
-
-// Fonction pour obtenir un token de service pour l'authentification entre services
-async function getServiceToken() {
-  // Implémenter la logique pour obtenir un token de service
-  // Cette fonction dépendra de votre implémentation de sécurité
-  // Par exemple, vous pourriez utiliser Firebase Admin SDK pour créer un token personnalisé
-  try {
-    const token = await admin.auth().createCustomToken('service-account');
-    return token;
-  } catch (error) {
-    console.error('Erreur lors de la création du token de service:', error);
-    throw error;
   }
 }
 
@@ -121,6 +111,7 @@ app.get('/:slopeId', async (req, res) => {
     }
 });
 // Modifiez votre route POST pour inclure les préférences utilisateur
+// Modifiez votre route POST pour inclure les préférences utilisateur et calculer les moyennes
 app.post('/', async (req, res) => {
     try {
         const userUid = req.headers['x-uid'];
@@ -132,67 +123,87 @@ app.post('/', async (req, res) => {
         if (!slopeId || !rating) {
             return res.status(400).json({ error: "Champs manquants" });
         }
+
+        // Vérifier si l'utilisateur a déjà laissé un avis
+        const existingReviewRef = db.ref(`reviews/${slopeId}/${userUid}`);
+        const existingReviewSnapshot = await existingReviewRef.once('value');
+        if (existingReviewSnapshot.exists()) {
+            return res.status(400).json({ error: "Vous avez déjà laissé un avis pour cette pente" });
+        }
         
         // Récupérer les préférences utilisateur
-        const userPreferences = await getUserPreferences(userUid);
+        const userProfile = await getUserProfile(userUid);
+        if (!userProfile) {
+            return res.status(404).json({ error: "Profil utilisateur non trouvé" });
+        }
+        console.log("Profil utilisateur récupéré:", userProfile);
         
         // Créer la review avec les préférences utilisateur
         const reviewRef = db.ref(`reviews/${slopeId}/${userUid}`);
         await reviewRef.set({
             userUid,
             rating,
-            preferences: userPreferences || {},
-            createdAt: admin.database.ServerValue.TIMESTAMP
+            createdAt: admin.database.ServerValue.TIMESTAMP,
+            userProfile: userProfile // Stocker les préférences avec l'avis
         });
-         // Le reste de votre code pour calculer et mettre à jour la moyenne des notes
-        const avgRatingRef = db.ref(`reviews/${slopeId}/averageRating`);
-        const avgRatingSnapshot = await avgRatingRef.once('value');
-        const avgRating = avgRatingSnapshot.val() || 0;
-        const numberOfReviewsRef = db.ref(`reviews/${slopeId}/numberOfReviews`);
-        const numberOfReviewsSnapshot = await numberOfReviewsRef.once('value');
-        const numberOfReviews = (numberOfReviewsSnapshot.val() || 0) + 1;
-        await numberOfReviewsRef.set(numberOfReviews);
-        const newAvgRating = ((avgRating * (numberOfReviews - 1)) + rating) / numberOfReviews;
-        await avgRatingRef.set(newAvgRating); 
-        res.status(201).json({ message: "Review créée avec succès" });
+        
+        // Référence pour les statistiques de la pente
+        // Nous utilisons reviews/{slopeId}/stats pour stocker toutes les statistiques
+        const statsRef = db.ref(`reviews/${slopeId}/stats`);
+        
+        // Obtenir les statistiques actuelles
+        const statsSnapshot = await statsRef.once('value');
+        const currentStats = statsSnapshot.val() || {};
+        
+        // Mettre à jour le nombre total d'évaluations et la note moyenne globale
+        const totalNumber = (currentStats.totalNumber || 0) + 1;
+        const currentAvg = currentStats.ratingAvg || 0;
+        const newRatingAvg = ((currentAvg * (totalNumber - 1)) + rating) / totalNumber;
+        
+        // Préparer les mises à jour pour les statistiques
+        const updates = {
+            ratingAvg: newRatingAvg,
+            totalNumber: totalNumber
+        };
+        
+        // Pour chaque préférence utilisateur, calculer la moyenne et incrémenter le compteur
+        Object.keys(userProfile).forEach(prefKey => {
+            // Ignorer les valeurs qui ne sont pas des nombres ou des chaînes
+            const prefValue = userProfile[prefKey];
+            if (typeof prefValue !== 'string' && typeof prefValue !== 'number') return;
+            
+            // Créer ou mettre à jour les statistiques pour cette préférence
+            const prefStats = currentStats[prefKey] || {};
+            
+            if (!prefStats[prefValue]) {
+                prefStats[prefValue] = {
+                    avg: rating,
+                    count: 1
+                };
+            } else {
+                const currentCount = prefStats[prefValue].count;
+                const currentAvg = prefStats[prefValue].avg;
+                prefStats[prefValue] = {
+                    avg: ((currentAvg * currentCount) + rating) / (currentCount + 1),
+                    count: currentCount + 1
+                };
+            }
+            
+            // Stocker directement dans l'objet stats sans ajouter "Stats" au nom de la clé
+            updates[prefKey] = prefStats;
+        });
+        
+        // Appliquer toutes les mises à jour en une seule opération
+        await statsRef.update(updates);
+        
+        res.status(201).json({ 
+            message: "Review créée avec succès",
+            stats: { ratingAvg: newRatingAvg, totalNumber: totalNumber }
+        });
     } catch (error) {
         handleError(res, "Erreur lors de la création de la review", error);
     }
 });
-
-
-// app.post('/', async (req, res) => {
-//     try {
-//         const userUid = req.headers['x-uid'];
-//         if (!userUid) {
-//             return res.status(401).json({ error: "Authentification requise. UID manquant dans l'en-tête" });
-//         }
-
-//         const { slopeId, rating } = req.body;
-//         if (!slopeId || !rating) {
-//             return res.status(400).json({ error: "Champs manquants" });
-//         }
-
-//         const reviewRef = db.ref(`reviews/${slopeId}/${userUid}`);
-//         await reviewRef.set({
-//             userUid,
-//             rating,
-//             createdAt: admin.database.ServerValue.TIMESTAMP
-//         });
-//         const avgRatingRef = db.ref(`reviews/${slopeId}/averageRating`);
-//         const avgRatingSnapshot = await avgRatingRef.once('value');
-//         const avgRating = avgRatingSnapshot.val() || 0;
-//         const numberOfReviewsRef = db.ref(`reviews/${slopeId}/numberOfReviews`);
-//         const numberOfReviewsSnapshot = await numberOfReviewsRef.once('value');
-//         const numberOfReviews = (numberOfReviewsSnapshot.val() || 0) + 1;
-//         await numberOfReviewsRef.set(numberOfReviews);
-//         const newAvgRating = ((avgRating * (numberOfReviews - 1)) + rating) / numberOfReviews;
-//         await avgRatingRef.set(newAvgRating); 
-//         res.status(201).json({ message: "Review créée avec succès" });
-//     } catch (error) {
-//         handleError(res, "Erreur lors de la création de la review", error);
-//     }
-// });
 
 app.delete('/:slopeId', async (req, res) => {
     try {
@@ -205,26 +216,91 @@ app.delete('/:slopeId', async (req, res) => {
             return res.status(400).json({ error: "ID de la pente manquant" });
         }
 
+        // 1. Récupérer la review à supprimer et ses données
         const reviewRef = db.ref(`reviews/${slopeId}/${userUid}`);
         const reviewSnapshot = await reviewRef.once('value');
         if (!reviewSnapshot.exists()) {
             return res.status(404).json({ error: "Aucun avis trouvé pour cet utilisateur sur cette pente" });
         }
-        await reviewRef.remove();
-        const avgRatingRef = db.ref(`reviews/${slopeId}/averageRating`);
-        const avgRatingSnapshot = await avgRatingRef.once('value');
-        const avgRating = avgRatingSnapshot.val() || 0;
-        const numberOfReviewsRef = db.ref(`reviews/${slopeId}/numberOfReviews`);
-        const numberOfReviewsSnapshot = await numberOfReviewsRef.once('value');
-        const numberOfReviews = (numberOfReviewsSnapshot.val() || 0) - 1;
-        await numberOfReviewsRef.set(numberOfReviews);
-        if (numberOfReviews > 0) {
-            const newAvgRating = ((avgRating * (numberOfReviews + 1)) - rating) / numberOfReviews;
-            await avgRatingRef.set(newAvgRating);
-        } else {
-            await avgRatingRef.set(0);
+        
+        // Extraire les données nécessaires de la review
+        const reviewData = reviewSnapshot.val();
+        const { rating, userProfile } = reviewData;
+        
+        // 2. Récupérer les statistiques actuelles de la pente
+        const statsRef = db.ref(`reviews/${slopeId}/stats`);
+        const statsSnapshot = await statsRef.once('value');
+        
+        if (statsSnapshot.exists()) {
+            const currentStats = statsSnapshot.val();
+            
+            // 3. Mettre à jour le nombre total d'avis et la moyenne globale
+            const totalNumber = currentStats.totalNumber - 1;
+            let newRatingAvg = 0;
+            
+            if (totalNumber > 0) {
+                newRatingAvg = ((currentStats.ratingAvg * currentStats.totalNumber) - rating) / totalNumber;
+            }
+            
+            // 4. Préparer les mises à jour pour les statistiques
+            const updates = {
+                ratingAvg: totalNumber > 0 ? newRatingAvg : 0,
+                totalNumber: totalNumber
+            };
+            
+            // 5. Créer deux listes: un pour les mises à jour et un pour les suppressions individuelles
+            const specificDeletions = [];
+            
+            // Mettre à jour les statistiques pour chaque préférence utilisateur
+            if (userProfile) {
+                Object.keys(userProfile).forEach(prefKey => {
+                    const prefValue = userProfile[prefKey];
+                    
+                    // Ignorer les valeurs qui ne sont pas des chaînes ou des nombres
+                    if (typeof prefValue !== 'string' && typeof prefValue !== 'number') return;
+                    
+                    // Vérifier si cette préférence existe dans les stats
+                    if (currentStats[prefKey] && currentStats[prefKey][prefValue]) {
+                        const prefStats = currentStats[prefKey][prefValue];
+                        const prefCount = prefStats.count - 1;
+                        
+                        if (prefCount <= 0) {
+                            // Au lieu de définir à null, ajouter à la liste des suppressions spécifiques
+                            specificDeletions.push(`${prefKey}/${prefValue}`);
+                        } else {
+                            // Recalculer la moyenne pour cette préférence
+                            const newPrefAvg = ((prefStats.avg * prefStats.count) - rating) / prefCount;
+                            if (!updates[prefKey]) updates[prefKey] = {};
+                            updates[prefKey][prefValue] = {
+                                avg: newPrefAvg,
+                                count: prefCount
+                            };
+                        }
+                    }
+                });
+            }
+            
+            // 6. D'abord appliquer les mises à jour
+            if (totalNumber > 0) {
+                await statsRef.update(updates);
+                
+                // Puis effectuer les suppressions individuelles une par une
+                for (const path of specificDeletions) {
+                    await statsRef.child(path).remove();
+                }
+            } else {
+                // Si c'était le dernier avis, supprimer les statistiques complètes
+                await statsRef.remove();
+            }
         }
-        res.status(200).json({ message: "Review supprimée avec succès" });
+        
+        // 7. Supprimer l'avis
+        await reviewRef.remove();
+        
+        res.status(200).json({ 
+            message: "Review supprimée avec succès",
+            statsUpdated: true
+        });
     } catch (error) {
         handleError(res, "Erreur lors de la suppression de la review", error);
     }
