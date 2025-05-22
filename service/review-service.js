@@ -1,311 +1,199 @@
 const express = require('express');
 const admin = require('firebase-admin');
-const serviceAccount = require('./firebase-service-account.json');
-const dotenv = require('dotenv');
-dotenv.config();
+const axios = require('axios');
+require('dotenv').config();
 
 const app = express();
 app.use(express.json());
-const PORT = 8083;
-const axios = require('axios');
-
-console.log(process.env.FIREBASE_URL);
 
 admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
+    credential: admin.credential.cert(require('./firebase-service-account.json')),
     databaseURL: process.env.FIREBASE_URL
 });
 
 const db = admin.database();
 
-// Helper functions
-const handleError = (res, message, error) => {
-    console.error(`${message}:`, error);
-    res.status(500).json({ error: message, details: error.message });
-};
-
-const getDbData = (path) => {
-    return new Promise((resolve, reject) => {
-        db.ref(path).once('value',
-            snapshot => resolve(snapshot.val() || null),
-            error => reject(error)
-        );
-    });
-};
-
-async function isAdmin(req, res, next) {
+// Middleware d'authentification admin
+const isAdmin = async (req, res, next) => {
     try {
         const userUid = req.headers['x-uid'];
-
-        if (!userUid) {
-            return res.status(401).json({ error: "Authentification requise. UID manquant dans l'en-tête" });
+        if (!userUid) return res.status(401).json({ error: "UID manquant" });
+        
+        const user = await admin.auth().getUser(userUid);
+        if (!user.customClaims?.admin) {
+            return res.status(403).json({ error: "Accès refusé" });
         }
-
-        // Récupérer les informations de l'utilisateur, y compris les custom claims
-        const userRecord = await admin.auth().getUser(userUid);
-
-        // Vérifier si l'utilisateur a le custom claim 'admin'
-        if (userRecord.customClaims && userRecord.customClaims.admin === true) {
-            // L'utilisateur est admin, continuer vers la route
-            next();
-        } else {
-            // L'utilisateur n'est pas admin
-            return res.status(403).json({
-                error: "Accès refusé",
-                message: "Vous n'avez pas les droits d'administration nécessaires"
-            });
-        }
+        next();
     } catch (error) {
-        console.error("Erreur lors de la vérification des droits d'administration:", error);
-        return res.status(500).json({
-            error: "Erreur serveur",
-            message: "Impossible de vérifier les droits d'administration"
-        });
+        res.status(500).json({ error: "Erreur d'authentification" });
     }
-}
+};
 
-// Fonction utilitaire pour récupérer les préférences utilisateur
-async function getUserProfile(userUid) {
-  try {
-    // URL du service de profil (en local)
-    const profileServiceUrl = process.env.PROFILE_SERVICE_URL || 'http://localhost:8081';
-    
-    // Faire la requête avec l'en-tête UID
-    const response = await axios.get(profileServiceUrl, {
-      headers: {
-        'x-uid': userUid
-      }
-    });
-    
-    return response.data;
-  } catch (error) {
-    console.error("Erreur lors de la récupération du profil utilisateur:", error.message);
-    // Retourner null ou un objet vide en cas d'erreur
-    return null;
-  }
-}
-
-app.get('/:slopeId', async (req, res) => {
-    // Récupérer l'avis de l'utilisateur sur la slope
-    const uid = req.headers['x-uid'];
-    if (!uid) return res.status(401).json({ error: "Authentification requise. UID manquant dans l'en-tête" });
-    console.log("UID de l'utilisateur:", uid);
-
-    const slopeId = req.params.slopeId;
-    if (!slopeId) return res.status(400).json({ error: "ID de la pente manquant" });
+// Récupération du profil utilisateur
+const getUserProfile = async (userUid) => {
     try {
-        const reviewRef = db.ref(`reviews/${slopeId}/${uid}`);
-        reviewRef.once('value', (snapshot) => {
-            if (snapshot.exists()) {
-                const review = snapshot.val();
-                res.status(200).json({ message: "Avis récupéré avec succès", review });
-            } else {
-                res.status(404).json({ error: "Aucun avis trouvé pour cet utilisateur sur cette pente" });
-            }
-        }, (error) => {
-            handleError(res, "Erreur lors de la récupération de l'avis", error);
-        });
-
+        const url = process.env.PROFILE_SERVICE_URL || 'http://localhost:8081';
+        const response = await axios.get(url, { headers: { 'x-uid': userUid } });
+        return response.data;
     } catch (error) {
-        handleError(res, "Erreur lors de la récupération de l'avis", error);
+        console.error("Erreur profil:", error.message);
+        return null;
+    }
+};
+
+// Mise à jour des statistiques
+const updateStats = async (slopeId, rating, userProfile, isDelete = false) => {
+    const statsRef = db.ref(`reviews/${slopeId}/stats`);
+    const snapshot = await statsRef.once('value');
+    const stats = snapshot.val() || {};
+    
+    const multiplier = isDelete ? -1 : 1;
+    const totalNumber = (stats.totalNumber || 0) + multiplier;
+    
+    let updates = { totalNumber };
+    
+    if (totalNumber > 0) {
+        const currentAvg = stats.ratingAvg || 0;
+        updates.ratingAvg = isDelete 
+            ? ((currentAvg * (totalNumber + 1)) - rating) / totalNumber
+            : ((currentAvg * (totalNumber - 1)) + rating) / totalNumber;
+    } else {
+        updates.ratingAvg = 0;
+    }
+    
+    // Gestion des préférences utilisateur
+    if (userProfile) {
+        const deletions = [];
+        
+        Object.entries(userProfile).forEach(([key, value]) => {
+            if (typeof value !== 'string' && typeof value !== 'number') return;
+            
+            const prefStats = stats[key] || {};
+            const currentPref = prefStats[value] || { avg: 0, count: 0 };
+            const newCount = currentPref.count + multiplier;
+            
+            if (newCount <= 0) {
+                if (isDelete) deletions.push(`${key}/${value}`);
+            } else {
+                // Préserver les statistiques existantes pour cette préférence
+                if (!updates[key]) updates[key] = { ...prefStats };
+                updates[key][value] = {
+                    avg: isDelete 
+                        ? ((currentPref.avg * currentPref.count) - rating) / newCount
+                        : ((currentPref.avg * currentPref.count) + rating) / newCount,
+                    count: newCount
+                };
+            }
+        });
+        
+        if (totalNumber > 0) {
+            await statsRef.update(updates);
+            for (const path of deletions) {
+                await statsRef.child(path).remove();
+            }
+        } else {
+            await statsRef.remove();
+        }
+    } else {
+        if (totalNumber > 0) {
+            await statsRef.update(updates);
+        } else {
+            await statsRef.remove();
+        }
+    }
+    
+    return updates;
+};
+
+// Routes
+app.get('/:slopeId', async (req, res) => {
+    const uid = req.headers['x-uid'];
+    const { slopeId } = req.params;
+    
+    if (!uid) return res.status(401).json({ error: "UID manquant" });
+    if (!slopeId) return res.status(400).json({ error: "ID manquant" });
+    
+    try {
+        const snapshot = await db.ref(`reviews/${slopeId}/${uid}`).once('value');
+        
+        if (snapshot.exists()) {
+            res.json({ message: "Avis trouvé", review: snapshot.val() });
+        } else {
+            res.status(404).json({ error: "Aucun avis trouvé" });
+        }
+    } catch (error) {
+        res.status(500).json({ error: "Erreur de récupération" });
     }
 });
-// Modifiez votre route POST pour inclure les préférences utilisateur
-// Modifiez votre route POST pour inclure les préférences utilisateur et calculer les moyennes
+
 app.post('/', async (req, res) => {
     try {
         const userUid = req.headers['x-uid'];
-        if (!userUid) {
-            return res.status(401).json({ error: "Authentification requise. UID manquant dans l'en-tête" });
-        }
-
         const { slopeId, rating } = req.body;
-        if (!slopeId || !rating) {
-            return res.status(400).json({ error: "Champs manquants" });
-        }
-
-        // Vérifier si l'utilisateur a déjà laissé un avis
-        const existingReviewRef = db.ref(`reviews/${slopeId}/${userUid}`);
-        const existingReviewSnapshot = await existingReviewRef.once('value');
-        if (existingReviewSnapshot.exists()) {
-            return res.status(400).json({ error: "Vous avez déjà laissé un avis pour cette pente" });
+        
+        if (!userUid) return res.status(401).json({ error: "UID manquant" });
+        if (!slopeId || !rating) return res.status(400).json({ error: "Champs manquants" });
+        
+        // Vérifier si l'avis existe déjà
+        const existingReview = await db.ref(`reviews/${slopeId}/${userUid}`).once('value');
+        if (existingReview.exists()) {
+            return res.status(400).json({ error: "Avis déjà existant" });
         }
         
-        // Récupérer les préférences utilisateur
         const userProfile = await getUserProfile(userUid);
         if (!userProfile) {
-            return res.status(404).json({ error: "Profil utilisateur non trouvé" });
+            return res.status(404).json({ error: "Profil non trouvé" });
         }
-        console.log("Profil utilisateur récupéré:", userProfile);
         
-        // Créer la review avec les préférences utilisateur
-        const reviewRef = db.ref(`reviews/${slopeId}/${userUid}`);
-        await reviewRef.set({
+        // Créer l'avis
+        await db.ref(`reviews/${slopeId}/${userUid}`).set({
             userUid,
             rating,
             createdAt: admin.database.ServerValue.TIMESTAMP,
-            userProfile: userProfile // Stocker les préférences avec l'avis
+            userProfile
         });
         
-        // Référence pour les statistiques de la pente
-        // Nous utilisons reviews/{slopeId}/stats pour stocker toutes les statistiques
-        const statsRef = db.ref(`reviews/${slopeId}/stats`);
-        
-        // Obtenir les statistiques actuelles
-        const statsSnapshot = await statsRef.once('value');
-        const currentStats = statsSnapshot.val() || {};
-        
-        // Mettre à jour le nombre total d'évaluations et la note moyenne globale
-        const totalNumber = (currentStats.totalNumber || 0) + 1;
-        const currentAvg = currentStats.ratingAvg || 0;
-        const newRatingAvg = ((currentAvg * (totalNumber - 1)) + rating) / totalNumber;
-        
-        // Préparer les mises à jour pour les statistiques
-        const updates = {
-            ratingAvg: newRatingAvg,
-            totalNumber: totalNumber
-        };
-        
-        // Pour chaque préférence utilisateur, calculer la moyenne et incrémenter le compteur
-        Object.keys(userProfile).forEach(prefKey => {
-            // Ignorer les valeurs qui ne sont pas des nombres ou des chaînes
-            const prefValue = userProfile[prefKey];
-            if (typeof prefValue !== 'string' && typeof prefValue !== 'number') return;
-            
-            // Créer ou mettre à jour les statistiques pour cette préférence
-            const prefStats = currentStats[prefKey] || {};
-            
-            if (!prefStats[prefValue]) {
-                prefStats[prefValue] = {
-                    avg: rating,
-                    count: 1
-                };
-            } else {
-                const currentCount = prefStats[prefValue].count;
-                const currentAvg = prefStats[prefValue].avg;
-                prefStats[prefValue] = {
-                    avg: ((currentAvg * currentCount) + rating) / (currentCount + 1),
-                    count: currentCount + 1
-                };
-            }
-            
-            // Stocker directement dans l'objet stats sans ajouter "Stats" au nom de la clé
-            updates[prefKey] = prefStats;
-        });
-        
-        // Appliquer toutes les mises à jour en une seule opération
-        await statsRef.update(updates);
+        // Mettre à jour les statistiques
+        const stats = await updateStats(slopeId, rating, userProfile);
         
         res.status(201).json({ 
-            message: "Review créée avec succès",
-            stats: { ratingAvg: newRatingAvg, totalNumber: totalNumber }
+            message: "Avis créé",
+            stats: { ratingAvg: stats.ratingAvg, totalNumber: stats.totalNumber }
         });
     } catch (error) {
-        handleError(res, "Erreur lors de la création de la review", error);
+        res.status(500).json({ error: "Erreur de création" });
     }
 });
 
 app.delete('/:slopeId', async (req, res) => {
     try {
         const userUid = req.headers['x-uid'];
-        if (!userUid) {
-            return res.status(401).json({ error: "Authentification requise. UID manquant dans l'en-tête" });
-        }
-        const slopeId = req.params.slopeId;
-        if (!slopeId) {
-            return res.status(400).json({ error: "ID de la pente manquant" });
-        }
-
-        // 1. Récupérer la review à supprimer et ses données
+        const { slopeId } = req.params;
+        
+        if (!userUid) return res.status(401).json({ error: "UID manquant" });
+        if (!slopeId) return res.status(400).json({ error: "ID manquant" });
+        
         const reviewRef = db.ref(`reviews/${slopeId}/${userUid}`);
-        const reviewSnapshot = await reviewRef.once('value');
-        if (!reviewSnapshot.exists()) {
-            return res.status(404).json({ error: "Aucun avis trouvé pour cet utilisateur sur cette pente" });
+        const snapshot = await reviewRef.once('value');
+        
+        if (!snapshot.exists()) {
+            return res.status(404).json({ error: "Avis non trouvé" });
         }
         
-        // Extraire les données nécessaires de la review
-        const reviewData = reviewSnapshot.val();
-        const { rating, userProfile } = reviewData;
+        const { rating, userProfile } = snapshot.val();
         
-        // 2. Récupérer les statistiques actuelles de la pente
-        const statsRef = db.ref(`reviews/${slopeId}/stats`);
-        const statsSnapshot = await statsRef.once('value');
+        // Mettre à jour les statistiques
+        await updateStats(slopeId, rating, userProfile, true);
         
-        if (statsSnapshot.exists()) {
-            const currentStats = statsSnapshot.val();
-            
-            // 3. Mettre à jour le nombre total d'avis et la moyenne globale
-            const totalNumber = currentStats.totalNumber - 1;
-            let newRatingAvg = 0;
-            
-            if (totalNumber > 0) {
-                newRatingAvg = ((currentStats.ratingAvg * currentStats.totalNumber) - rating) / totalNumber;
-            }
-            
-            // 4. Préparer les mises à jour pour les statistiques
-            const updates = {
-                ratingAvg: totalNumber > 0 ? newRatingAvg : 0,
-                totalNumber: totalNumber
-            };
-            
-            // 5. Créer deux listes: un pour les mises à jour et un pour les suppressions individuelles
-            const specificDeletions = [];
-            
-            // Mettre à jour les statistiques pour chaque préférence utilisateur
-            if (userProfile) {
-                Object.keys(userProfile).forEach(prefKey => {
-                    const prefValue = userProfile[prefKey];
-                    
-                    // Ignorer les valeurs qui ne sont pas des chaînes ou des nombres
-                    if (typeof prefValue !== 'string' && typeof prefValue !== 'number') return;
-                    
-                    // Vérifier si cette préférence existe dans les stats
-                    if (currentStats[prefKey] && currentStats[prefKey][prefValue]) {
-                        const prefStats = currentStats[prefKey][prefValue];
-                        const prefCount = prefStats.count - 1;
-                        
-                        if (prefCount <= 0) {
-                            // Au lieu de définir à null, ajouter à la liste des suppressions spécifiques
-                            specificDeletions.push(`${prefKey}/${prefValue}`);
-                        } else {
-                            // Recalculer la moyenne pour cette préférence
-                            const newPrefAvg = ((prefStats.avg * prefStats.count) - rating) / prefCount;
-                            if (!updates[prefKey]) updates[prefKey] = {};
-                            updates[prefKey][prefValue] = {
-                                avg: newPrefAvg,
-                                count: prefCount
-                            };
-                        }
-                    }
-                });
-            }
-            
-            // 6. D'abord appliquer les mises à jour
-            if (totalNumber > 0) {
-                await statsRef.update(updates);
-                
-                // Puis effectuer les suppressions individuelles une par une
-                for (const path of specificDeletions) {
-                    await statsRef.child(path).remove();
-                }
-            } else {
-                // Si c'était le dernier avis, supprimer les statistiques complètes
-                await statsRef.remove();
-            }
-        }
-        
-        // 7. Supprimer l'avis
+        // Supprimer l'avis
         await reviewRef.remove();
         
-        res.status(200).json({ 
-            message: "Review supprimée avec succès",
-            statsUpdated: true
-        });
+        res.json({ message: "Avis supprimé", statsUpdated: true });
     } catch (error) {
-        handleError(res, "Erreur lors de la suppression de la review", error);
+        res.status(500).json({ error: "Erreur de suppression" });
     }
 });
 
-app.listen(PORT, '127.0.0.1', () => {
-    console.log(`User service démarré sur http://127.0.0.1:${PORT}`);
+app.listen(8083, '127.0.0.1', () => {
+    console.log('Service démarré sur http://127.0.0.1:8083');
 });
