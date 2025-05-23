@@ -13,21 +13,6 @@ admin.initializeApp({
 
 const db = admin.database();
 
-// Middleware d'authentification admin
-const isAdmin = async (req, res, next) => {
-    try {
-        const userUid = req.headers['x-uid'];
-        if (!userUid) return res.status(401).json({ error: "UID manquant" });
-        
-        const user = await admin.auth().getUser(userUid);
-        if (!user.customClaims?.admin) {
-            return res.status(403).json({ error: "Accès refusé" });
-        }
-        next();
-    } catch (error) {
-        res.status(500).json({ error: "Erreur d'authentification" });
-    }
-};
 
 // Récupération du profil utilisateur
 const getUserProfile = async (userUid) => {
@@ -42,8 +27,8 @@ const getUserProfile = async (userUid) => {
 };
 
 // Mise à jour des statistiques
-const updateStats = async (slopeId, rating, userProfile, isDelete = false) => {
-    const statsRef = db.ref(`reviews/${slopeId}/stats`);
+const updateStats = async (resortId, slopeId, rating, userProfile, isDelete = false) => {
+    const statsRef = db.ref(`reviews/${resortId}/${slopeId}/stats`);
     const snapshot = await statsRef.once('value');
     const stats = snapshot.val() || {};
     
@@ -105,16 +90,84 @@ const updateStats = async (slopeId, rating, userProfile, isDelete = false) => {
     return updates;
 };
 
-// Routes
-app.get('/:slopeId', async (req, res) => {
+// Retrieve all avg ratings for a specific slope
+app.get('/slope/avg/all/:resortId/:slopeId', async (req, res) => {
+    const { resortId, slopeId } = req.params;
+    
+    if (!slopeId) return res.status(400).json({ error: "ID manquant" });
+    if (!resortId) return res.status(400).json({ error: "ID station manquant" });
+    
+    try {
+        const snapshot = await db.ref(`reviews/${resortId}/${slopeId}/stats`).once('value');
+        
+        if (snapshot.exists()) {
+            res.json({ message: "Statistiques trouvées", stats: snapshot.val() });
+        } else {
+            res.status(404).json({ error: "Aucune statistique trouvée" });
+        }
+    } catch (error) {
+        res.status(500).json({ error: "Erreur de récupération" });
+    }
+});
+
+// Retrieve average rating for a specific slope
+app.get('/slope/avg/:resortId/:slopeId', async (req, res) => {
+    const { resortId, slopeId } = req.params;
+
+    
+    if (!slopeId) return res.status(400).json({ error: "ID manquant" });
+    if (!resortId) return res.status(400).json({ error: "ID station manquant" });
+
+    try {
+        const snapshot = await db.ref(`reviews/${resortId}/${slopeId}/stats`).once('value');
+        
+        if (snapshot.exists()) {
+            const stats = snapshot.val();
+            res.json({ message: "Statistiques trouvées", ratingAvg: stats.ratingAvg, totalNumber: stats.totalNumber });
+        } else {
+            res.status(404).json({ error: "Aucune statistique trouvée" });
+        }
+    } catch (error) {
+        res.status(500).json({ error: "Erreur de récupération" });
+    }
+});
+
+//Retrieve all avg ratings for a specific resort
+app.get('/resort/:resortId', async (req, res) => {
+    //Récupérer les ratingAvg de toutes les pistes d'une station
+    const { resortId } = req.params;
+    if (!resortId) return res.status(400).json({ error: "ID station manquant" });
+
+    try {
+        const snapshot = await db.ref(`reviews/${resortId}`).once('value');
+        if (snapshot.exists()) {
+            const allStats = snapshot.val();
+            const ratingsArray = Object.entries(allStats)
+                .filter(([slopeId, stats]) => stats.stats && stats.stats.ratingAvg !== undefined)
+                .map(([slopeId, stats]) => ({
+                    slopeId: slopeId,
+                    rating: stats.stats.ratingAvg
+                }));
+            
+            res.json(ratingsArray);
+        } else {
+            res.json([]); // Retourner un tableau vide si aucune statistique
+        }
+    } catch (error) {
+        res.status(500).json({ error: "Erreur de récupération" });
+    }
+});
+
+// Retrieve the user review
+app.get('/user/:resortId/:slopeId', async (req, res) => {
     const uid = req.headers['x-uid'];
-    const { slopeId } = req.params;
+    const { resortId, slopeId } = req.params;
     
     if (!uid) return res.status(401).json({ error: "UID manquant" });
     if (!slopeId) return res.status(400).json({ error: "ID manquant" });
     
     try {
-        const snapshot = await db.ref(`reviews/${slopeId}/${uid}`).once('value');
+        const snapshot = await db.ref(`reviews/${resortId}/${slopeId}/${uid}`).once('value');
         
         if (snapshot.exists()) {
             res.json({ message: "Avis trouvé", review: snapshot.val() });
@@ -126,16 +179,17 @@ app.get('/:slopeId', async (req, res) => {
     }
 });
 
+// Add a new review
 app.post('/', async (req, res) => {
     try {
         const userUid = req.headers['x-uid'];
-        const { slopeId, rating } = req.body;
+        const { slopeId, resortId, rating } = req.body;
         
         if (!userUid) return res.status(401).json({ error: "UID manquant" });
-        if (!slopeId || !rating) return res.status(400).json({ error: "Champs manquants" });
+        if (!slopeId || !rating || !resortId) return res.status(400).json({ error: "Champs manquants" });
         
         // Vérifier si l'avis existe déjà
-        const existingReview = await db.ref(`reviews/${slopeId}/${userUid}`).once('value');
+        const existingReview = await db.ref(`reviews/${resortId}/${slopeId}/${userUid}`).once('value');
         if (existingReview.exists()) {
             return res.status(400).json({ error: "Avis déjà existant" });
         }
@@ -146,7 +200,7 @@ app.post('/', async (req, res) => {
         }
         
         // Créer l'avis
-        await db.ref(`reviews/${slopeId}/${userUid}`).set({
+        await db.ref(`reviews/${resortId}/${slopeId}/${userUid}`).set({
             userUid,
             rating,
             createdAt: admin.database.ServerValue.TIMESTAMP,
@@ -154,26 +208,28 @@ app.post('/', async (req, res) => {
         });
         
         // Mettre à jour les statistiques
-        const stats = await updateStats(slopeId, rating, userProfile);
+        const stats = await updateStats(resortId, slopeId, rating, userProfile);
         
         res.status(201).json({ 
             message: "Avis créé",
             stats: { ratingAvg: stats.ratingAvg, totalNumber: stats.totalNumber }
         });
     } catch (error) {
-        res.status(500).json({ error: "Erreur de création" });
+        res.status(500).json({ error: "Erreur de création", details: error.message });
     }
 });
 
-app.delete('/:slopeId', async (req, res) => {
+// Delete a review
+app.delete('/:resortId/:slopeId', async (req, res) => {
     try {
         const userUid = req.headers['x-uid'];
-        const { slopeId } = req.params;
+        const { resortId, slopeId } = req.params;
         
         if (!userUid) return res.status(401).json({ error: "UID manquant" });
         if (!slopeId) return res.status(400).json({ error: "ID manquant" });
+        if (!resortId) return res.status(400).json({ error: "ID station manquant" });
         
-        const reviewRef = db.ref(`reviews/${slopeId}/${userUid}`);
+        const reviewRef = db.ref(`reviews/${resortId}/${slopeId}/${userUid}`);
         const snapshot = await reviewRef.once('value');
         
         if (!snapshot.exists()) {
@@ -183,7 +239,7 @@ app.delete('/:slopeId', async (req, res) => {
         const { rating, userProfile } = snapshot.val();
         
         // Mettre à jour les statistiques
-        await updateStats(slopeId, rating, userProfile, true);
+        await updateStats(resortId, slopeId, rating, userProfile, true);
         
         // Supprimer l'avis
         await reviewRef.remove();
