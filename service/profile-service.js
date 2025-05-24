@@ -105,6 +105,19 @@ app.get('/', async (req, res) => {
   }
 });
 
+app.delete('/', async (req, res) => {
+  const userUid = req.headers['x-uid'];
+  if (!userUid) return res.status(400).json({ error: "UID manquant dans l'en-tête" });
+  try {
+    const userData = await getDbData(`users/${userUid}`);
+    if (!userData) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    await db.ref(`users/${userUid}`).remove();
+    res.json({ message: 'Utilisateur supprimé avec succès' });
+  } catch (error) {
+    handleError(res, 'Erreur lors de la suppression de l’utilisateur', error);
+  }
+});
+
 // Add a new question
 app.post('/questions/create', isAdmin, async (req, res) => {
   try {
