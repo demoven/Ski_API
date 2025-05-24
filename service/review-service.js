@@ -51,7 +51,8 @@ const updateStats = async (resortId, slopeId, rating, userProfile, isDelete = fa
         const deletions = [];
         
         Object.entries(userProfile).forEach(([key, value]) => {
-            if (typeof value !== 'string' && typeof value !== 'number') return;
+            // Accepter les strings, numbers ET booleans
+            if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') return;
             
             const prefStats = stats[key] || {};
             const currentPref = prefStats[value] || { avg: 0, count: 0 };

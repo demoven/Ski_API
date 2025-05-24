@@ -3,6 +3,7 @@ const { getDatabase } = require('../services/database');
 const { ObjectId } = require('mongodb');
 const admin = require('firebase-admin');
 const serviceAccount = require('../firebase-service-account.json');
+const axios = require('axios');
 const dotenv = require('dotenv');
 dotenv.config();
 
@@ -13,6 +14,169 @@ admin.initializeApp({
   databaseURL: process.env.FIREBASE_URL
 });
 
+const db_firebase = admin.database();
+
+// Fonction pour récupérer le profil utilisateur
+const getUserProfile = async (userUid) => {
+  try {
+    const url = process.env.PROFILE_SERVICE_URL || 'http://localhost:8081';
+    const response = await axios.get(url, { headers: { 'x-uid': userUid } });
+    return response.data;
+  } catch (error) {
+    console.error("Erreur profil:", error.message);
+    return null;
+  }
+};
+
+// Fonction pour récupérer les statistiques d'une piste
+const getSlopeStats = async (resortId, slopeId) => {
+  try {
+    const snapshot = await db_firebase.ref(`reviews/${resortId}/${slopeId}/stats`).once('value');
+    return snapshot.exists() ? snapshot.val() : null;
+  } catch (error) {
+    console.error("Erreur récupération stats:", error.message);
+    return null;
+  }
+};
+// Fonction améliorée pour calculer le score de pertinence d'une piste
+const calculateSlopeRelevance = (slope, userProfile, slopeStats) => {
+  let score = 0;
+  let factorCount = 0;
+
+  // Si pas de statistiques, se baser principalement sur le niveau utilisateur
+  if (!slopeStats || slopeStats.totalNumber === 0) {
+    // Score par défaut basé sur la difficulté
+    const difficultyOrder = { 'Vert': 4, 'Bleu': 3, 'Rouge': 2, 'Noir': 1 };
+    let defaultScore = difficultyOrder[slope.difficulty] || 2.5;
+    
+    // Si le profil utilisateur existe avec un niveau, donner priorité à la correspondance niveau/difficulté
+    if (userProfile && userProfile.level) {
+      const userLevel = userProfile.level.toLowerCase();
+      const slopeDifficulty = slope.difficulty;
+      
+      const levelMapping = {
+        'vert': {
+          'Vert': 5.0,     // Parfait - augmenté pour donner priorité
+          'Bleu': 3.0,     // Acceptable pour progresser - augmenté
+          'Rouge': 1.0,    // Trop difficile mais possible
+          'Noir': 0.5      // Dangereux mais listé
+        },
+        'bleu': {
+          'Vert': 3.0,     // Un peu facile
+          'Bleu': 5.0,     // Parfait - augmenté
+          'Rouge': 3.5,    // Bon défi - augmenté
+          'Noir': 2.0      // Encore difficile mais possible
+        },
+        'rouge': {
+          'Vert': 1.5,     // Trop facile
+          'Bleu': 3.0,     // Facile
+          'Rouge': 5.0,    // Parfait - augmenté
+          'Noir': 4.0      // Bon défi - augmenté
+        },
+        'noir': {
+          'Vert': 1.0,     // Beaucoup trop facile
+          'Bleu': 2.0,     // Trop facile
+          'Rouge': 4.0,    // Bon niveau
+          'Noir': 5.0      // Parfait - augmenté
+        }
+      };
+
+      if (levelMapping[userLevel] && levelMapping[userLevel][slopeDifficulty] !== undefined) {
+        // Remplacer le score par défaut par le score basé sur le niveau
+        return levelMapping[userLevel][slopeDifficulty];
+      }
+    }
+    
+    return defaultScore;
+  }
+
+  // 1. Score de base basé sur la note moyenne générale (poids: 1.0)
+  if (slopeStats.ratingAvg && slopeStats.totalNumber > 0) {
+    score += slopeStats.ratingAvg;
+    factorCount += 1.0;
+  }
+
+  // 2. Bonus basé sur les préférences utilisateur similaires (poids: 0.8)
+  if (userProfile && slopeStats) {
+    Object.entries(userProfile).forEach(([key, value]) => {
+      if (slopeStats[key] && slopeStats[key][value]) {
+        const prefStat = slopeStats[key][value];
+        if (prefStat.count > 0) {
+          // Pondération basée sur le nombre d'avis similaires
+          const confidence = Math.min(prefStat.count / 3, 1); // Confiance max à 3 avis
+          const weight = confidence * 0.8;
+          score += prefStat.avg * weight;
+          factorCount += weight;
+        }
+      }
+    });
+  }
+
+  // 3. Correspondance niveau utilisateur / difficulté piste (poids: 1.2)
+  if (userProfile && userProfile.level) {
+    const userLevel = userProfile.level.toLowerCase();
+    const slopeDifficulty = slope.difficulty;
+    let difficultyScore = 0;
+    
+    const levelMapping = {
+      'vert': {
+        'Vert': 2.0,    // Parfait
+        'Bleu': 0.5,    // Acceptable pour progresser
+        'Rouge': -1.5,  // Trop difficile
+        'Noir': -2.0    // Dangereux
+      },
+      'bleu': {
+        'Vert': 0.3,    // Un peu facile
+        'Bleu': 2.0,    // Parfait
+        'Rouge': 1.0,   // Bon défi
+        'Noir': -0.8    // Encore difficile
+      },
+      'rouge': {
+        'Vert': -0.5,   // Trop facile
+        'Bleu': -0.2,   // Facile
+        'Rouge': 1.5,   // Bien
+        'Noir': 2.0     // Parfait
+      },
+      'noir': {
+        'Vert': -0.5,
+        'Bleu': -0.2,
+        'Rouge': 1.5,
+        'Noir': 2.0
+      }
+    };
+
+    if (levelMapping[userLevel] && levelMapping[userLevel][slopeDifficulty] !== undefined) {
+      difficultyScore = levelMapping[userLevel][slopeDifficulty];
+      // Augmenter le poids lorsqu'il y a peu d'avis (inversement proportionnel)
+      const levelWeight = 1.2 + (3 / Math.max(slopeStats.totalNumber, 1)) * 0.8;
+      score += difficultyScore * levelWeight;
+      factorCount += levelWeight;
+    }
+  }
+
+  // 4. Bonus de popularité avec courbe logarithmique (poids: 0.3)
+  if (slopeStats.totalNumber > 0) {
+    const popularityScore = Math.log(slopeStats.totalNumber + 1) * 0.15;
+    score += popularityScore;
+    factorCount += 0.3;
+  }
+
+  // 5. Malus pour les pistes avec très peu d'avis (moins de 3)
+  if (slopeStats.totalNumber > 0 && slopeStats.totalNumber < 3) {
+    score -= 0.5; // Légère pénalité pour manque de données
+  }
+
+  // 6. Bonus pour les pistes très bien notées (>= 4.0)
+  if (slopeStats.ratingAvg >= 4.0) {
+    score += 0.3;
+  }
+
+  // Normalisation finale
+  const finalScore = factorCount > 0 ? score / Math.max(factorCount, 1) : 2.5;
+  
+  // S'assurer que le score reste dans une plage raisonnable
+  return Math.max(0, Math.min(5, finalScore));
+};
 
 async function isAdmin(req, res, next) {
   try {
@@ -89,32 +253,84 @@ router.get('/names', async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
-
-//GET: Retrieve a ski resort by name
 router.get('/:name', async (req, res) => {
   try {
-    //Connect to the database
     const db = getDatabase('France');
-
-    //Access the collection
     const collection = db.collection('ski_resorts');
-
-    //Find the resort by name
     const resort = await collection.findOne({ name: req.params.name });
 
-    //Check if the resort was found
     if (!resort) {
       return res.status(404).json({ error: "Resort not found" });
     }
 
-    //Send the resort as a JSON response with a 200 status code
+    // Récupérer l'UID utilisateur et son profil
+    const userUid = req.headers['x-uid'];
+    let userProfile = null;
+    
+    if (userUid) {
+      userProfile = await getUserProfile(userUid);
+      console.log(`Profil utilisateur récupéré pour ${userUid}:`, userProfile);
+    }
+
+    // Traitement des pistes si elles existent
+    if (resort.slopes && resort.slopes.length > 0) {
+      console.log(`Tri de ${resort.slopes.length} pistes pour la station ${resort.name}`);
+      
+      // Récupérer les statistiques et calculer les scores
+      const slopesWithRelevance = await Promise.all(
+        resort.slopes.map(async (slope, index) => {
+          try {
+            const stats = await getSlopeStats(resort._id, slope._id);
+            const relevanceScore = calculateSlopeRelevance(slope, userProfile, stats);
+            
+            console.log(`Piste ${slope.name}: score=${relevanceScore.toFixed(2)}, difficulté=${slope.difficulty}`);
+            
+            return {
+              ...slope,
+              relevanceScore: Number(relevanceScore.toFixed(2)),
+              stats: stats ? {
+                ratingAvg: Number((stats.ratingAvg || 0).toFixed(2)),
+                totalNumber: stats.totalNumber || 0
+              } : null,
+              originalIndex: index // Pour debug
+            };
+          } catch (error) {
+            console.error(`Erreur traitement piste ${slope.name}:`, error);
+            return {
+              ...slope,
+              relevanceScore: 2.5, // Score neutre en cas d'erreur
+              stats: null,
+              originalIndex: index
+            };
+          }
+        })
+      );
+
+      // Tri par score de pertinence décroissant, puis par note moyenne
+      resort.slopes = slopesWithRelevance.sort((a, b) => {
+        if (Math.abs(a.relevanceScore - b.relevanceScore) < 0.1) {
+          // Si les scores sont très proches, trier par note moyenne
+          const avgA = a.stats?.ratingAvg || 0;
+          const avgB = b.stats?.ratingAvg || 0;
+          return avgB - avgA;
+        }
+        return b.relevanceScore - a.relevanceScore;
+      });
+
+      console.log('Ordre final des pistes:', resort.slopes.map(s => 
+        `${s.name} (${s.relevanceScore})`
+      ).join(', '));
+    }
+
     res.status(200).json(resort);
   } catch (error) {
-    //Send a 500 status code for any errors that occur
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error("Erreur dans GET /:name:", error);
+    res.status(500).json({ 
+      error: "Internal Server Error",
+      message: "Erreur lors de la récupération et du tri des pistes"
+    });
   }
 });
-
 //POST: Add a new ski resort
 router.post('/', isAdmin, async (req, res) => {
   try {
