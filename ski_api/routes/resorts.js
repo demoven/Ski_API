@@ -331,6 +331,31 @@ router.get('/:name', async (req, res) => {
     });
   }
 });
+
+router.get('/coordinates/:currentLat/:currentLng/:destinationId', async (req, res) => {
+  try {
+    const { currentLat, currentLng, destinationId } = req.params;
+
+    console.log('currentLat:', currentLat);
+    console.log('currentLng:', currentLng);
+    console.log('destinationId:', destinationId);
+
+    const testData = [
+      {
+        "lat":43.09762198347906,
+        "lng":5.884755593921662
+      },
+      {
+        "lat":43.10133521973748,
+        "lng":5.883511052014766
+      }
+    ]
+    res.status(200).json(testData);
+  } catch (error) {
+  }
+
+});
+
 //POST: Add a new ski resort
 router.post('/', isAdmin, async (req, res) => {
   try {
