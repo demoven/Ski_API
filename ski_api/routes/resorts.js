@@ -17,28 +17,28 @@ admin.initializeApp({
 async function isAdmin(req, res, next) {
   try {
     const userUid = req.headers['x-uid'];
-    
+
     if (!userUid) {
       return res.status(401).json({ error: "Authentification requise. UID manquant dans l'en-tête" });
     }
-    
+
     // Récupérer les informations de l'utilisateur, y compris les custom claims
     const userRecord = await admin.auth().getUser(userUid);
-    
+
     // Vérifier si l'utilisateur a le custom claim 'admin'
     if (userRecord.customClaims && userRecord.customClaims.admin === true) {
       // L'utilisateur est admin, continuer vers la route
       next();
     } else {
       // L'utilisateur n'est pas admin
-      return res.status(403).json({ 
-        error: "Accès refusé", 
+      return res.status(403).json({
+        error: "Accès refusé",
         message: "Vous n'avez pas les droits d'administration nécessaires"
       });
     }
   } catch (error) {
     console.error("Erreur lors de la vérification des droits d'administration:", error);
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: "Erreur serveur",
       message: "Impossible de vérifier les droits d'administration"
     });
@@ -77,7 +77,7 @@ router.get('/names', async (req, res) => {
 
     // Find all resorts in the collection and project only the name field
     const resortsWithId = await collection.find({}, { projection: { name: 1 } }).toArray();
-    
+
     // Extract only the names from the result objects
     const resortNames = resortsWithId.map(resort => resort.name);
 
@@ -116,7 +116,7 @@ router.get('/:name', async (req, res) => {
 });
 
 //POST: Add a new ski resort
-router.post('/',isAdmin, async (req, res) => {
+router.post('/', isAdmin, async (req, res) => {
   try {
     //Connect to the database
     const db = getDatabase('France');
@@ -129,59 +129,62 @@ router.post('/',isAdmin, async (req, res) => {
     const isNumber = value => typeof value === 'number';
     const isArray = Array.isArray;
     const isObject = value => value && typeof value === 'object';
-    
+    const resortId = new ObjectId();
+
     const resort = {
-      _id: new ObjectId(),
+      _id: resortId,
       name: isString(req.body.station) ? req.body.station : "Unnamed resort",
       slopes: isArray(req.body.slopes)
         ? req.body.slopes.map(slope => ({
-            _id: new ObjectId(),
-            name: isString(slope.nom) ? slope.nom : "Unnamed slope",
-            elevation: isNumber(slope.altitude_depart) ? slope.altitude_depart : 0,
-            difficulty: isString(slope.difficulte) ? slope.difficulte : "unknown",
-            listCoordinates: isArray(slope.gps_coords)
-              ? slope.listCoordinates
-                  .filter(coord => isObject(coord) && isNumber(coord.lat) && isNumber(coord.lng))
-                  .map(coord => ({
-                    _id: new ObjectId(),
-                    lat: coord[1],
-                    lng: coord[0],
-                  }))
-              : [],
-              intersections: isArray(slope.connexions)
-              ? slope.connextions.map(intersection => ({
+          resortId: resortId,
+          _id: new ObjectId(),
+          name: isString(slope.nom) ? slope.nom : "Unnamed slope",
+          elevation: isNumber(slope.altitude_depart) ? slope.altitude_depart : 0,
+          difficulty: isString(slope.difficulte) ? slope.difficulte : "unknown",
+          listCoordinates: isArray(slope.gps_coords)
+            ? slope.gps_coords
+              .filter(coord => isObject(coord) && isNumber(coord.lat) && isNumber(coord.lng))
+              .map(coord => ({
+                _id: new ObjectId(),
+                lat: coord[1],
+                lng: coord[0],
+              }))
+            : [],
+          intersections: isArray(slope.connexions)
+            ? slope.connexions.map(intersection => ({
+              _id: new ObjectId(),
+              name: isString(intersection.name) ? intersection.name : "Unnamed intersection",
+              coordinates: isObject(intersection.coordinates) && isNumber(intersection.coordinates.lat) && isNumber(intersection.coordinates.lng)
+                ? {
                   _id: new ObjectId(),
-                  name: isString(intersection.name) ? intersection.name : "Unnamed intersection",
-                  coordinates: isObject(intersection.coordinates) && isNumber(intersection.coordinates.lat) && isNumber(intersection.coordinates.lng)
-                    ? {
-                        _id: new ObjectId(),
-                        lat: intersection.coordinates.lat,
-                        lng: intersection.coordinates.lng,
-                      }
-                    : null,
-                }))
-              : [],
-          }))
+                  lat: intersection.coordinates.lat,
+                  lng: intersection.coordinates.lng,
+                }
+                : null,
+            }))
+            : [],
+        }))
         : [],
       lifts: isArray(req.body.lifts)
         ? req.body.lifts.map(lift => ({
-            _id: new ObjectId(),
-            name: isString(lift.name) ? lift.name : "Unnamed lift",
-            start: isObject(lift.start) && isNumber(lift.start.lat) && isNumber(lift.start.lng)
-              ? {
-                  _id: new ObjectId(),
-                  lat: lift.start.lat,
-                  lng: lift.start.lng,
-                }
-              : null,
-            end: isObject(lift.end) && isNumber(lift.end.lat) && isNumber(lift.end.lng)
-              ? {
-                  _id: new ObjectId(),
-                  lat: lift.end.lat,
-                  lng: lift.end.lng,
-                }
-              : null,
-          }))
+          resortId: resortId,
+          _id: new ObjectId(),
+          name: isString(lift.name) ? lift.name : "Unnamed lift",
+          start: isObject(lift.start) && isNumber(lift.start.lat) && isNumber(lift.start.lng)
+            ? {
+              _id: new ObjectId(),
+              lat: lift.start.lat,
+              lng: lift.start.lng,
+            }
+            : null,
+          end: isObject(lift.end) && isNumber(lift.end.lat) && isNumber(lift.end.lng)
+            ? {
+              _id: new ObjectId(),
+              lat: lift.end.lat,
+              lng: lift.end.lng,
+            }
+            : null,
+        }))
         : [],
     };
 
@@ -206,7 +209,7 @@ router.post('/',isAdmin, async (req, res) => {
 });
 
 //DELETE: Delete a ski resort by name
-router.delete('/:name',isAdmin, async (req, res) => {
+router.delete('/:name', isAdmin, async (req, res) => {
   try {
     //Connect to the database
     const db = getDatabase('France');
@@ -231,7 +234,7 @@ router.delete('/:name',isAdmin, async (req, res) => {
 });
 
 //DELETE: Delete a ski resort by ID
-router.delete('/id/:id',isAdmin, async (req, res) => {
+router.delete('/id/:id', isAdmin, async (req, res) => {
   try {
     //Connect to the database
     const db = getDatabase('France');

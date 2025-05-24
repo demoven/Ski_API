@@ -133,6 +133,7 @@ app.get('/slope/avg/:resortId/:slopeId', async (req, res) => {
 });
 
 //Retrieve all avg ratings for a specific resort
+//OK
 app.get('/resort/:resortId', async (req, res) => {
     //Récupérer les ratingAvg de toutes les pistes d'une station
     const { resortId } = req.params;
@@ -159,6 +160,7 @@ app.get('/resort/:resortId', async (req, res) => {
 });
 
 // Retrieve the user review
+// OK
 app.get('/user/:resortId/:slopeId', async (req, res) => {
     const uid = req.headers['x-uid'];
     const { resortId, slopeId } = req.params;
@@ -170,7 +172,9 @@ app.get('/user/:resortId/:slopeId', async (req, res) => {
         const snapshot = await db.ref(`reviews/${resortId}/${slopeId}/${uid}`).once('value');
         
         if (snapshot.exists()) {
-            res.json({ message: "Avis trouvé", review: snapshot.val() });
+            const review = snapshot.val();
+            const rating = review.rating;
+            res.json({ slopeId: slopeId, rating: rating });
         } else {
             res.status(404).json({ error: "Aucun avis trouvé" });
         }
