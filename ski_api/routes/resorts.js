@@ -370,7 +370,7 @@ router.get('/coordinates/:currentLat/:currentLng/:destinationId', async (req, re
   }
 
 });
-//POST: Add a new ski resort or update existing one
+//POST: Add a new ski resort or update existing one (preserving all existing IDs)
 router.post('/', isAdmin, async (req, res) => {
   try {
     //Connect to the database
@@ -379,7 +379,7 @@ router.post('/', isAdmin, async (req, res) => {
     //Access the collection
     const collection = db.collection('ski_resorts');
 
-    //Check if the resort already exists in the collection
+    //Helper functions
     const isString = value => typeof value === 'string';
     const isNumber = value => typeof value === 'number';
     const isArray = Array.isArray;
@@ -394,76 +394,111 @@ router.post('/', isAdmin, async (req, res) => {
     let isUpdate = false;
     
     if (existingResort) {
-      // La station existe, on utilise son ID existant
       resortId = existingResort._id;
       isUpdate = true;
-      console.log(`Station "${stationName}" trouvée, mise à jour des données...`);
+      console.log(`Station "${stationName}" trouvée, mise à jour avec préservation des IDs...`);
     } else {
-      // Nouvelle station, on génère un nouvel ID
       resortId = new ObjectId();
       console.log(`Nouvelle station "${stationName}", création...`);
     }
 
-    const resort = {
-      _id: resortId,
-      name: stationName,
-      slopes: isArray(req.body.slopes)
-        ? req.body.slopes.map(slope => ({
+    // Fonction pour trouver un élément existant par nom
+    const findExistingByName = (existingArray, name) => {
+      return existingArray ? existingArray.find(item => item.name === name) : null;
+    };
+
+    // Fonction pour créer/mettre à jour les pistes
+    const processSlopes = () => {
+      if (!isArray(req.body.slopes)) return [];
+      
+      return req.body.slopes.map(slope => {
+        const slopeName = isString(slope.name) ? slope.name : "Unnamed slope";
+        const existingSlope = isUpdate ? findExistingByName(existingResort.slopes, slopeName) : null;
+        
+        return {
           resortId: resortId,
-          _id: new ObjectId(),
-          name: isString(slope.name) ? slope.name : "Unnamed slope",
+          _id: existingSlope ? existingSlope._id : new ObjectId(), // Préserver l'ID existant
+          name: slopeName,
           difficulty: isString(slope.difficulty) ? slope.difficulty : "Vert",
           listCoordinates: isArray(slope.coordinates)
-            ? slope.coordinates
-              .map(coord => ({
-                _id: new ObjectId(),
+            ? slope.coordinates.map(coord => ({
+                _id: new ObjectId(), // Nouvelles coordonnées = nouveaux IDs
                 lat: coord[1],
                 lng: coord[0],
               }))
             : [],
           intersections: isArray(slope.connection)
-            ? slope.connection.map(connection => ({
-              _id: new ObjectId(),
-              name: isString(connection.name) ? connection.name : "Unnamed intersection",
-              coordinates: isArray(connection.coordinates)
-                ? [{
-                  _id: new ObjectId(),
-                  lat: connection.coordinates[1], // Deuxième élément pour latitude
-                  lng: connection.coordinates[0], // Premier élément pour longitude
-                }]
-                : [],
-            }))
+            ? slope.connection.map(connection => {
+                const connectionName = isString(connection.name) ? connection.name : "Unnamed intersection";
+                const existingIntersection = existingSlope && existingSlope.intersections 
+                  ? findExistingByName(existingSlope.intersections, connectionName) 
+                  : null;
+                
+                return {
+                  _id: existingIntersection ? existingIntersection._id : new ObjectId(),
+                  name: connectionName,
+                  coordinates: isArray(connection.coordinates)
+                    ? [{
+                        _id: new ObjectId(), // Nouvelles coordonnées = nouveaux IDs
+                        lat: connection.coordinates[1],
+                        lng: connection.coordinates[0],
+                      }]
+                    : [],
+                };
+              })
             : [],
-        }))
-        : [],
-      lifts: isArray(req.body.chair_lifts)
-        ? req.body.chair_lifts.map(lift => ({
+        };
+      });
+    };
+
+    // Fonction pour créer/mettre à jour les remontées
+    const processLifts = () => {
+      if (!isArray(req.body.chair_lifts)) return [];
+      
+      return req.body.chair_lifts.map(lift => {
+        const liftName = isString(lift.name) ? lift.name : "Unnamed lift";
+        const existingLift = isUpdate ? findExistingByName(existingResort.lifts, liftName) : null;
+        
+        return {
           resortId: resortId,
-          _id: new ObjectId(),
-          name: isString(lift.name) ? lift.name : "Unnamed lift",
+          _id: existingLift ? existingLift._id : new ObjectId(), // Préserver l'ID existant
+          name: liftName,
           coordinates: isArray(lift.coordinates)
-            ? lift.coordinates
-              .map(coord => ({
-                _id: new ObjectId(),
+            ? lift.coordinates.map(coord => ({
+                _id: new ObjectId(), // Nouvelles coordonnées = nouveaux IDs
                 lat: coord[1],
                 lng: coord[0],
               }))
             : [],
           connections: isArray(lift.connection)
-            ? lift.connection.map(connection => ({
-              _id: new ObjectId(),
-              name: isString(connection.name) ? connection.name : "Unnamed connection",
-              coordinates: isArray(connection.coordinates)
-                ? [{
-                  _id: new ObjectId(),
-                  lat: connection.coordinates[1], // Deuxième élément pour latitude
-                  lng: connection.coordinates[0], // Premier élément pour longitude
-                }]
-                : [],
-            }))
+            ? lift.connection.map(connection => {
+                const connectionName = isString(connection.name) ? connection.name : "Unnamed connection";
+                const existingConnection = existingLift && existingLift.connections 
+                  ? findExistingByName(existingLift.connections, connectionName) 
+                  : null;
+                
+                return {
+                  _id: existingConnection ? existingConnection._id : new ObjectId(),
+                  name: connectionName,
+                  coordinates: isArray(connection.coordinates)
+                    ? [{
+                        _id: new ObjectId(), // Nouvelles coordonnées = nouveaux IDs
+                        lat: connection.coordinates[1],
+                        lng: connection.coordinates[0],
+                      }]
+                    : [],
+                };
+              })
             : [],
-        }))
-        : [],
+        };
+      });
+    };
+
+    const resort = {
+      _id: resortId,
+      name: stationName,
+      slopes: processSlopes(),
+      lifts: processLifts(),
     };
 
     let result;
@@ -475,37 +510,45 @@ router.post('/', isAdmin, async (req, res) => {
         resort
       );
       
-      if (result.modifiedCount === 0) {
+      if (result.modifiedCount === 0 && result.matchedCount === 0) {
         return res.status(404).json({ error: "Resort not found for update" });
       }
       
-      //Send success response for update
+      console.log(`Station "${stationName}" mise à jour avec préservation des IDs`);
+      
       res.status(200).json({
         _id: resortId,
-        message: "Resort updated successfully",
-        operation: "update"
+        message: "Resort updated successfully with preserved IDs",
+        operation: "update",
+        slopesCount: resort.slopes.length,
+        liftsCount: resort.lifts.length
       });
       
     } else {
       // Insérer une nouvelle station
       result = await collection.insertOne(resort);
       
-      //Send the inserted resort as a JSON response with a 201 status code
+      console.log(`Nouvelle station "${stationName}" créée`);
+      
       res.status(201).json({
         _id: result.insertedId,
         message: "Resort created successfully", 
-        operation: "create"
+        operation: "create",
+        slopesCount: resort.slopes.length,
+        liftsCount: resort.lifts.length
       });
     }
 
   } catch (error) {
-    //Send a 400 status code if the error is a validation error
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
     }
-    //Send a 500 status code for any other errors
+    
     console.error("Erreur lors de la création/mise à jour de la station:", error);
-    res.status(500).json({ error: "Internal Server Error" });
+    res.status(500).json({ 
+      error: "Internal Server Error",
+      message: error.message 
+    });
   }
 });
 
