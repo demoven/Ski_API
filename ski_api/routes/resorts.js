@@ -259,6 +259,20 @@ router.get('/:name', async (req, res) => {
     const db = getDatabase('France');
     const collection = db.collection('ski_resorts');
     const resort = await collection.findOne({ name: req.params.name });
+    const resortWithoutSlopesAndLifts = {
+      _id: resort._id,
+      name: resort.name,
+      slopes: resort.slopes ? resort.slopes.map(slope => ({
+        _id: slope._id,
+        name: slope.name,
+        difficulty: slope.difficulty,
+        resortId: slope.resortId,
+      })) : [],
+      lifts: resort.lifts ? resort.lifts.map(lift => ({
+        _id: lift._id,
+        name: lift.name,
+      })) : [],
+    }
 
     if (!resort) {
       return res.status(404).json({ error: "Resort not found" });
@@ -274,14 +288,14 @@ router.get('/:name', async (req, res) => {
     }
 
     // Traitement des pistes si elles existent
-    if (resort.slopes && resort.slopes.length > 0) {
-      console.log(`Tri de ${resort.slopes.length} pistes pour la station ${resort.name}`);
+    if (resortWithoutSlopesAndLifts.slopes && resortWithoutSlopesAndLifts.slopes.length > 0) {
+      console.log(`Tri de ${resortWithoutSlopesAndLifts.slopes.length} pistes pour la station ${resortWithoutSlopesAndLifts.name}`);
 
       // Récupérer les statistiques et calculer les scores
       const slopesWithRelevance = await Promise.all(
-        resort.slopes.map(async (slope, index) => {
+        resortWithoutSlopesAndLifts.slopes.map(async (slope, index) => {
           try {
-            const stats = await getSlopeStats(resort._id, slope._id);
+            const stats = await getSlopeStats(resortWithoutSlopesAndLifts._id, slope._id);
             const relevanceScore = calculateSlopeRelevance(slope, userProfile, stats);
 
             console.log(`Piste ${slope.name}: score=${relevanceScore.toFixed(2)}, difficulté=${slope.difficulty}`);
@@ -308,7 +322,7 @@ router.get('/:name', async (req, res) => {
       );
 
       // Tri par score de pertinence décroissant, puis par note moyenne
-      resort.slopes = slopesWithRelevance.sort((a, b) => {
+      resortWithoutSlopesAndLifts.slopes = slopesWithRelevance.sort((a, b) => {
         if (Math.abs(a.relevanceScore - b.relevanceScore) < 0.1) {
           // Si les scores sont très proches, trier par note moyenne
           const avgA = a.stats?.ratingAvg || 0;
@@ -318,12 +332,12 @@ router.get('/:name', async (req, res) => {
         return b.relevanceScore - a.relevanceScore;
       });
 
-      console.log('Ordre final des pistes:', resort.slopes.map(s =>
+      console.log('Ordre final des pistes:', resortWithoutSlopesAndLifts.slopes.map(s =>
         `${s.name} (${s.relevanceScore})`
       ).join(', '));
     }
 
-    res.status(200).json(resort);
+    res.status(200).json(resortWithoutSlopesAndLifts);
   } catch (error) {
     console.error("Erreur dans GET /:name:", error);
     res.status(500).json({
@@ -356,8 +370,7 @@ router.get('/coordinates/:currentLat/:currentLng/:destinationId', async (req, re
   }
 
 });
-
-//POST: Add a new ski resort
+//POST: Add a new ski resort or update existing one
 router.post('/', isAdmin, async (req, res) => {
   try {
     //Connect to the database
@@ -371,11 +384,29 @@ router.post('/', isAdmin, async (req, res) => {
     const isNumber = value => typeof value === 'number';
     const isArray = Array.isArray;
     const isObject = value => value && typeof value === 'object';
-    const resortId = new ObjectId();
+
+    const stationName = isString(req.body.station) ? req.body.station : "Unnamed resort";
+    
+    // Vérifier si la station existe déjà
+    const existingResort = await collection.findOne({ name: stationName });
+    
+    let resortId;
+    let isUpdate = false;
+    
+    if (existingResort) {
+      // La station existe, on utilise son ID existant
+      resortId = existingResort._id;
+      isUpdate = true;
+      console.log(`Station "${stationName}" trouvée, mise à jour des données...`);
+    } else {
+      // Nouvelle station, on génère un nouvel ID
+      resortId = new ObjectId();
+      console.log(`Nouvelle station "${stationName}", création...`);
+    }
 
     const resort = {
       _id: resortId,
-      name: isString(req.body.station) ? req.body.station : "Unnamed resort",
+      name: stationName,
       slopes: isArray(req.body.slopes)
         ? req.body.slopes.map(slope => ({
           resortId: resortId,
@@ -390,7 +421,7 @@ router.post('/', isAdmin, async (req, res) => {
                 lng: coord[0],
               }))
             : [],
-          intersections: isArray(slope.connection) // Changé de slope.connection à slope.connection
+          intersections: isArray(slope.connection)
             ? slope.connection.map(connection => ({
               _id: new ObjectId(),
               name: isString(connection.name) ? connection.name : "Unnamed intersection",
@@ -433,25 +464,48 @@ router.post('/', isAdmin, async (req, res) => {
             : [],
         }))
         : [],
+    };
+
+    let result;
+    
+    if (isUpdate) {
+      // Mettre à jour la station existante
+      result = await collection.replaceOne(
+        { _id: resortId },
+        resort
+      );
+      
+      if (result.modifiedCount === 0) {
+        return res.status(404).json({ error: "Resort not found for update" });
+      }
+      
+      //Send success response for update
+      res.status(200).json({
+        _id: resortId,
+        message: "Resort updated successfully",
+        operation: "update"
+      });
+      
+    } else {
+      // Insérer une nouvelle station
+      result = await collection.insertOne(resort);
+      
+      //Send the inserted resort as a JSON response with a 201 status code
+      res.status(201).json({
+        _id: result.insertedId,
+        message: "Resort created successfully", 
+        operation: "create"
+      });
     }
 
-    //Insert the new resort into the collection
-    const result = await collection.insertOne(resort);
-
-    //Send the inserted resort as a JSON response with a 201 status code
-    res.status(201).json({
-      //Include the inserted ID in the response
-      _id: result.insertedId,
-
-    });
   } catch (error) {
     //Send a 400 status code if the error is a validation error
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
     }
     //Send a 500 status code for any other errors
+    console.error("Erreur lors de la création/mise à jour de la station:", error);
     res.status(500).json({ error: "Internal Server Error" });
-    console.log(error);
   }
 });
 
