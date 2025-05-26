@@ -5,6 +5,7 @@ const admin = require('firebase-admin');
 const serviceAccount = require('../firebase-service-account.json');
 const axios = require('axios');
 const dotenv = require('dotenv');
+const { connections } = require('mongoose');
 dotenv.config();
 
 const router = express.Router();
@@ -48,12 +49,12 @@ const calculateSlopeRelevance = (slope, userProfile, slopeStats) => {
     // Score par défaut basé sur la difficulté
     const difficultyOrder = { 'Vert': 4, 'Bleu': 3, 'Rouge': 2, 'Noir': 1 };
     let defaultScore = difficultyOrder[slope.difficulty] || 2.5;
-    
+
     // Si le profil utilisateur existe avec un niveau, donner priorité à la correspondance niveau/difficulté
     if (userProfile && userProfile.level) {
       const userLevel = userProfile.level.toLowerCase();
       const slopeDifficulty = slope.difficulty;
-      
+
       const levelMapping = {
         'vert': {
           'Vert': 5.0,     // Parfait - augmenté pour donner priorité
@@ -86,7 +87,7 @@ const calculateSlopeRelevance = (slope, userProfile, slopeStats) => {
         return levelMapping[userLevel][slopeDifficulty];
       }
     }
-    
+
     return defaultScore;
   }
 
@@ -117,7 +118,7 @@ const calculateSlopeRelevance = (slope, userProfile, slopeStats) => {
     const userLevel = userProfile.level.toLowerCase();
     const slopeDifficulty = slope.difficulty;
     let difficultyScore = 0;
-    
+
     const levelMapping = {
       'vert': {
         'Vert': 2.0,    // Parfait
@@ -173,7 +174,7 @@ const calculateSlopeRelevance = (slope, userProfile, slopeStats) => {
 
   // Normalisation finale
   const finalScore = factorCount > 0 ? score / Math.max(factorCount, 1) : 2.5;
-  
+
   // S'assurer que le score reste dans une plage raisonnable
   return Math.max(0, Math.min(5, finalScore));
 };
@@ -266,7 +267,7 @@ router.get('/:name', async (req, res) => {
     // Récupérer l'UID utilisateur et son profil
     const userUid = req.headers['x-uid'];
     let userProfile = null;
-    
+
     if (userUid) {
       userProfile = await getUserProfile(userUid);
       console.log(`Profil utilisateur récupéré pour ${userUid}:`, userProfile);
@@ -275,16 +276,16 @@ router.get('/:name', async (req, res) => {
     // Traitement des pistes si elles existent
     if (resort.slopes && resort.slopes.length > 0) {
       console.log(`Tri de ${resort.slopes.length} pistes pour la station ${resort.name}`);
-      
+
       // Récupérer les statistiques et calculer les scores
       const slopesWithRelevance = await Promise.all(
         resort.slopes.map(async (slope, index) => {
           try {
             const stats = await getSlopeStats(resort._id, slope._id);
             const relevanceScore = calculateSlopeRelevance(slope, userProfile, stats);
-            
+
             console.log(`Piste ${slope.name}: score=${relevanceScore.toFixed(2)}, difficulté=${slope.difficulty}`);
-            
+
             return {
               ...slope,
               relevanceScore: Number(relevanceScore.toFixed(2)),
@@ -317,7 +318,7 @@ router.get('/:name', async (req, res) => {
         return b.relevanceScore - a.relevanceScore;
       });
 
-      console.log('Ordre final des pistes:', resort.slopes.map(s => 
+      console.log('Ordre final des pistes:', resort.slopes.map(s =>
         `${s.name} (${s.relevanceScore})`
       ).join(', '));
     }
@@ -325,7 +326,7 @@ router.get('/:name', async (req, res) => {
     res.status(200).json(resort);
   } catch (error) {
     console.error("Erreur dans GET /:name:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: "Internal Server Error",
       message: "Erreur lors de la récupération et du tri des pistes"
     });
@@ -342,12 +343,12 @@ router.get('/coordinates/:currentLat/:currentLng/:destinationId', async (req, re
 
     const testData = [
       {
-        "lat":43.09762198347906,
-        "lng":5.884755593921662
+        "lat": 43.09762198347906,
+        "lng": 5.884755593921662
       },
       {
-        "lat":43.10133521973748,
-        "lng":5.883511052014766
+        "lat": 43.10133521973748,
+        "lng": 5.883511052014766
       }
     ]
     res.status(200).json(testData);
@@ -379,55 +380,60 @@ router.post('/', isAdmin, async (req, res) => {
         ? req.body.slopes.map(slope => ({
           resortId: resortId,
           _id: new ObjectId(),
-          name: isString(slope.nom) ? slope.nom : "Unnamed slope",
-          elevation: isNumber(slope.altitude_depart) ? slope.altitude_depart : 0,
-          difficulty: isString(slope.difficulte) ? slope.difficulte : "unknown",
-          listCoordinates: isArray(slope.gps_coords)
-            ? slope.gps_coords
-              .filter(coord => isObject(coord) && isNumber(coord.lat) && isNumber(coord.lng))
+          name: isString(slope.name) ? slope.name : "Unnamed slope",
+          difficulty: isString(slope.difficulty) ? slope.difficulty : "Vert",
+          listCoordinates: isArray(slope.coordinates)
+            ? slope.coordinates
               .map(coord => ({
                 _id: new ObjectId(),
                 lat: coord[1],
                 lng: coord[0],
               }))
             : [],
-          intersections: isArray(slope.connexions)
-            ? slope.connexions.map(intersection => ({
+          intersections: isArray(slope.connection) // Changé de slope.connection à slope.connection
+            ? slope.connection.map(connection => ({
               _id: new ObjectId(),
-              name: isString(intersection.name) ? intersection.name : "Unnamed intersection",
-              coordinates: isObject(intersection.coordinates) && isNumber(intersection.coordinates.lat) && isNumber(intersection.coordinates.lng)
-                ? {
+              name: isString(connection.name) ? connection.name : "Unnamed intersection",
+              coordinates: isArray(connection.coordinates)
+                ? [{
                   _id: new ObjectId(),
-                  lat: intersection.coordinates.lat,
-                  lng: intersection.coordinates.lng,
-                }
-                : null,
+                  lat: connection.coordinates[1], // Deuxième élément pour latitude
+                  lng: connection.coordinates[0], // Premier élément pour longitude
+                }]
+                : [],
             }))
             : [],
         }))
         : [],
-      lifts: isArray(req.body.lifts)
-        ? req.body.lifts.map(lift => ({
+      lifts: isArray(req.body.chair_lifts)
+        ? req.body.chair_lifts.map(lift => ({
           resortId: resortId,
           _id: new ObjectId(),
           name: isString(lift.name) ? lift.name : "Unnamed lift",
-          start: isObject(lift.start) && isNumber(lift.start.lat) && isNumber(lift.start.lng)
-            ? {
+          coordinates: isArray(lift.coordinates)
+            ? lift.coordinates
+              .map(coord => ({
+                _id: new ObjectId(),
+                lat: coord[1],
+                lng: coord[0],
+              }))
+            : [],
+          connections: isArray(lift.connection)
+            ? lift.connection.map(connection => ({
               _id: new ObjectId(),
-              lat: lift.start.lat,
-              lng: lift.start.lng,
-            }
-            : null,
-          end: isObject(lift.end) && isNumber(lift.end.lat) && isNumber(lift.end.lng)
-            ? {
-              _id: new ObjectId(),
-              lat: lift.end.lat,
-              lng: lift.end.lng,
-            }
-            : null,
+              name: isString(connection.name) ? connection.name : "Unnamed connection",
+              coordinates: isArray(connection.coordinates)
+                ? [{
+                  _id: new ObjectId(),
+                  lat: connection.coordinates[1], // Deuxième élément pour latitude
+                  lng: connection.coordinates[0], // Premier élément pour longitude
+                }]
+                : [],
+            }))
+            : [],
         }))
         : [],
-    };
+    }
 
     //Insert the new resort into the collection
     const result = await collection.insertOne(resort);
