@@ -74,7 +74,7 @@ const calculateSlopeRelevance = (slope, userProfile, slopeStats) => {
           'Rouge': 5.0,    // Parfait - augmenté
           'Noir': 4.0      // Bon défi - augmenté
         },
-        'noir': {
+        'noire': {
           'Vert': 1.0,     // Beaucoup trop facile
           'Bleu': 2.0,     // Trop facile
           'Rouge': 4.0,    // Bon niveau
@@ -347,26 +347,31 @@ router.get('/:name', async (req, res) => {
   }
 });
 
-router.get('/coordinates/:currentLat/:currentLng/:destinationId', async (req, res) => {
+router.get('/coordinates/:currentLat/:currentLng/:resortId/:slopeId', async (req, res) => {
   try {
-    const { currentLat, currentLng, destinationId } = req.params;
+    const { currentLat, currentLng, resortId, slopeId } = req.params;
+    console.log("resortId:", resortId);
+    console.log("slopeId:", slopeId);
+    const db = getDatabase('France');
+    const collection = db.collection('ski_resorts');
+    const resort = await collection.findOne({ _id: new ObjectId(resortId) });
+    if (!resort) {
+      return res.status(404).json({ error: "Resort not found" });
+    }
+    const slope = resort.slopes.find(s => s._id.toString() === slopeId);
+    if (!slope) {
+      return res.status(404).json({ error: "Slope not found" });
+    }
+    const coordinates = slope.listCoordinates.map(coord => ({
+      lat: coord.lat,
+      lng: coord.lng
+    }));
 
-    console.log('currentLat:', currentLat);
-    console.log('currentLng:', currentLng);
-    console.log('destinationId:', destinationId);
 
-    const testData = [
-      {
-        "lat": 43.09762198347906,
-        "lng": 5.884755593921662
-      },
-      {
-        "lat": 43.10133521973748,
-        "lng": 5.883511052014766
-      }
-    ]
-    res.status(200).json(testData);
+    res.status(200).json(coordinates);
   } catch (error) {
+    console.error("Error in GET /coordinates:", error);
+    res.status(500).json({ error: "Internal Server Error", message: error.message });
   }
 
 });

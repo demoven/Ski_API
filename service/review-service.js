@@ -17,7 +17,7 @@ const db = admin.database();
 // Récupération du profil utilisateur
 const getUserProfile = async (userUid) => {
     try {
-        const url = process.env.PROFILE_SERVICE_URL || 'http://localhost:8081';
+        const url = process.env.PROFILE_SERVICE || 'http://localhost:8081';
         const response = await axios.get(url, { headers: { 'x-uid': userUid } });
         return response.data;
     } catch (error) {
