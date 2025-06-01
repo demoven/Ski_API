@@ -1,6 +1,7 @@
 const express = require('express');
 const { connectToDatabase } = require('./services/database');
 const resortsRoutes = require('./routes/resorts');
+const coordinatesRoutes = require('./routes/coordinates');
 
 
 const app = express();
@@ -16,6 +17,7 @@ const startServer = async () => {
 
     // Use the comments routes
     app.use('/', resortsRoutes);
+    app.use('/', coordinatesRoutes);
 
     // Start the server
 

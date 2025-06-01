@@ -5,7 +5,6 @@ const admin = require('firebase-admin');
 const serviceAccount = require('../firebase-service-account.json');
 const axios = require('axios');
 const dotenv = require('dotenv');
-const { connections } = require('mongoose');
 dotenv.config();
 
 const router = express.Router();
@@ -347,34 +346,6 @@ router.get('/:name', async (req, res) => {
   }
 });
 
-router.get('/coordinates/:currentLat/:currentLng/:resortId/:slopeId', async (req, res) => {
-  try {
-    const { currentLat, currentLng, resortId, slopeId } = req.params;
-    console.log("resortId:", resortId);
-    console.log("slopeId:", slopeId);
-    const db = getDatabase('France');
-    const collection = db.collection('ski_resorts');
-    const resort = await collection.findOne({ _id: new ObjectId(resortId) });
-    if (!resort) {
-      return res.status(404).json({ error: "Resort not found" });
-    }
-    const slope = resort.slopes.find(s => s._id.toString() === slopeId);
-    if (!slope) {
-      return res.status(404).json({ error: "Slope not found" });
-    }
-    const coordinates = slope.listCoordinates.map(coord => ({
-      lat: coord.lat,
-      lng: coord.lng
-    }));
-
-
-    res.status(200).json(coordinates);
-  } catch (error) {
-    console.error("Error in GET /coordinates:", error);
-    res.status(500).json({ error: "Internal Server Error", message: error.message });
-  }
-
-});
 //POST: Add a new ski resort or update existing one (preserving all existing IDs)
 router.post('/', isAdmin, async (req, res) => {
   try {
