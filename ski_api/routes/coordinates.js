@@ -7,327 +7,419 @@ dotenv.config();
 const router = express.Router();
 
 // Fonction pour calculer la distance entre deux points (formule de Haversine)
-const calculateDistance = (lat1, lng1, lat2, lng2) => {
-  const R = 6371; // Rayon de la Terre en km
+function calculateDistance(lat1, lng1, lat2, lng2) {
+  const R = 6371000; // Rayon de la Terre en mètres
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLng = (lng2 - lng1) * Math.PI / 180;
   const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
     Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
     Math.sin(dLng/2) * Math.sin(dLng/2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c * 1000; // Distance en mètres
-};
+  return R * c;
+}
 
-// Fonction pour trouver le point le plus proche d'une position donnée
-const findNearestPoint = (currentLat, currentLng, coordinates) => {
-  let nearest = null;
-  let minDistance = Infinity;
-  let nearestIndex = -1;
+// Fonction pour obtenir le niveau de difficulté numérique
+function getDifficultyLevel(difficulty) {
+  const levels = { 'Vert': 1, 'Bleu': 2, 'Rouge': 3, 'Noir': 4 };
+  return levels[difficulty] || 0;
+}
 
-  coordinates.forEach((coord, index) => {
-    const distance = calculateDistance(currentLat, currentLng, coord.lat, coord.lng);
-    if (distance < minDistance) {
-      minDistance = distance;
-      nearest = coord;
-      nearestIndex = index;
+// Fonction pour vérifier si l'utilisateur peut emprunter une piste
+function canUseSlope(userMaxDifficulty, slopeDifficulty) {
+  return getDifficultyLevel(slopeDifficulty) <= getDifficultyLevel(userMaxDifficulty);
+}
+
+// Créer un identifiant unique pour un point
+function createPointId(type, mainId, index = 0) {
+  return `${type}_${mainId}_${index}`;
+}
+
+// Construire tous les points du réseau avec filtrage par difficulté
+function buildNetworkPoints(resort, maxDifficulty) {
+  const points = new Map();
+  
+  console.log(`Construction des points du réseau avec difficulté max: ${maxDifficulty}...`);
+  
+  // TOUTES les pistes mais marquées comme accessibles ou non
+  resort.slopes.forEach(slope => {
+    const isAccessible = canUseSlope(maxDifficulty, slope.difficulty);
+    console.log(`Ajout piste ${slope.name} (${slope.difficulty}) - ${isAccessible ? 'ACCESSIBLE' : 'NON ACCESSIBLE'} - ${slope.listCoordinates.length} points`);
+    
+    // Points de la piste
+    slope.listCoordinates.forEach((coord, index) => {
+      const pointId = createPointId('slope', slope._id, index);
+      points.set(pointId, {
+        id: pointId,
+        lat: coord.lat,
+        lng: coord.lng,
+        type: 'slope',
+        slopeId: slope._id,
+        slopeName: slope.name,
+        index: index,
+        difficulty: slope.difficulty,
+        isStart: index === 0,
+        isEnd: index === slope.listCoordinates.length - 1,
+        accessible: isAccessible
+      });
+    });
+    
+    // Points d'intersection
+    if (slope.intersections && slope.intersections.length > 0) {
+      slope.intersections.forEach(intersection => {
+        intersection.coordinates.forEach((coord, index) => {
+          const pointId = createPointId('intersection', intersection._id, index);
+          points.set(pointId, {
+            id: pointId,
+            lat: coord.lat,
+            lng: coord.lng,
+            type: 'intersection',
+            intersectionId: intersection._id,
+            intersectionName: intersection.name,
+            slopeId: slope._id,
+            accessible: true // Les intersections sont toujours accessibles
+          });
+        });
+      });
     }
   });
+  
+  // TOUS les télésièges (toujours accessibles)
+  resort.lifts.forEach(lift => {
+    const liftId = lift._id || lift.name;
+    console.log(`Ajout télesiège ${lift.name} - ${lift.coordinates.length} points`);
+    
+    lift.coordinates.forEach((coord, index) => {
+      const pointId = createPointId('lift', liftId, index);
+      points.set(pointId, {
+        id: pointId,
+        lat: coord.lat,
+        lng: coord.lng,
+        type: 'lift',
+        liftId: liftId,
+        liftName: lift.name,
+        index: index,
+        isStart: index === 0,
+        isEnd: index === lift.coordinates.length - 1,
+        accessible: true
+      });
+    });
+    
+    // Connexions des télésièges
+    if (lift.connections && lift.connections.length > 0) {
+      lift.connections.forEach(connection => {
+        connection.coordinates.forEach((coord, index) => {
+          const pointId = createPointId('connection', connection._id, index);
+          points.set(pointId, {
+            id: pointId,
+            lat: coord.lat,
+            lng: coord.lng,
+            type: 'connection',
+            connectionId: connection._id,
+            connectionName: connection.name,
+            connectionType: connection.type,
+            liftId: liftId,
+            accessible: true
+          });
+        });
+      });
+    }
+  });
+  
+  console.log(`Total points créés: ${points.size}`);
+  return points;
+}
 
-  return { point: nearest, distance: minDistance, index: nearestIndex };
-};
-
-// Fonction pour construire le graphe des connexions
-const buildConnectionGraph = (resort) => {
+// Construire le graphe avec connexions et filtrage par difficulté
+function buildGraph(points, maxDifficulty) {
   const graph = new Map();
   
-  // Ajouter toutes les pistes au graphe
-  resort.slopes.forEach(slope => {
-    const slopeId = slope._id.toString();
-    if (!graph.has(slopeId)) {
-      graph.set(slopeId, {
-        type: 'slope',
-        name: slope.name,
-        coordinates: slope.listCoordinates || [],
-        connections: []
-      });
-    }
-
-    // Ajouter les connexions de cette piste
-    if (slope.intersections) {
-      slope.intersections.forEach(intersection => {
-        // Chercher la piste de destination par nom
-        const targetSlope = resort.slopes.find(s => s.name === intersection.name);
-        if (targetSlope) {
-          graph.get(slopeId).connections.push({
-            targetId: targetSlope._id.toString(),
-            type: 'slope_to_slope',
-            connectionPoint: intersection.coordinates[0] || null
-          });
+  // Initialiser le graphe
+  points.forEach((point, pointId) => {
+    graph.set(pointId, {
+      point: point,
+      neighbors: []
+    });
+  });
+  
+  console.log(`Construction des connexions logiques avec difficulté max: ${maxDifficulty}...`);
+  let connectionsCount = 0;
+  let blockedConnections = 0;
+  
+  // Créer les connexions
+  points.forEach((point1, id1) => {
+    points.forEach((point2, id2) => {
+      if (id1 !== id2) {
+        const distance = calculateDistance(point1.lat, point1.lng, point2.lat, point2.lng);
+        let shouldConnect = false;
+        let weight = distance;
+        let connectionReason = '';
+        
+        // VÉRIFICATION DE LA DIFFICULTÉ - Empêcher l'utilisation de pistes trop difficiles
+        const canUsePoint1 = point1.accessible;
+        const canUsePoint2 = point2.accessible;
+        
+        if (!canUsePoint1 || !canUsePoint2) {
+          // Ne pas créer de connexion si l'une des pistes est trop difficile
+          if (distance < 100) { // Ne compter que les connexions qui auraient été créées
+            blockedConnections++;
+            if (blockedConnections <= 10) {
+              console.log(`CONNEXION BLOQUÉE: ${point1.type}(${point1.slopeName || point1.liftName || 'unknown'}) -> ${point2.type}(${point2.slopeName || point2.liftName || 'unknown'}) - Difficulté trop élevée`);
+            }
+          }
+          return; // Ignorer cette connexion
         }
-      });
+        
+        // 1. Points consécutifs sur la même piste (DESCENDANT UNIQUEMENT)
+        if (point1.type === 'slope' && point2.type === 'slope' && 
+            point1.slopeId === point2.slopeId && 
+            point2.index === point1.index + 1) {
+          shouldConnect = true;
+          connectionReason = 'piste_descendante';
+        }
+        
+        // 2. Points consécutifs sur le même télesiège (MONTANT UNIQUEMENT)
+        else if (point1.type === 'lift' && point2.type === 'lift' && 
+                 point1.liftId === point2.liftId && 
+                 point2.index === point1.index + 1) {
+          shouldConnect = true;
+          weight = distance * 0.3;
+          connectionReason = 'teleliege_montant';
+        }
+        
+        // 3. Connexions entre éléments différents (distance plus flexible)
+        else if (distance < 100) { // Augmentation à 100m
+          
+          // Haut de télésiège vers début de piste
+          if (point1.type === 'lift' && point1.isEnd && point2.type === 'slope' && point2.isStart) {
+            shouldConnect = true;
+            connectionReason = 'haut_teleliege_vers_debut_piste';
+          }
+          
+          // Fin de piste vers base de télésiège
+          else if (point1.type === 'slope' && point1.isEnd && point2.type === 'lift' && point2.isStart) {
+            shouldConnect = true;
+            connectionReason = 'fin_piste_vers_base_teleliege';
+          }
+          
+          // Connexions via intersections
+          else if (point1.type === 'intersection' || point2.type === 'intersection') {
+            shouldConnect = true;
+            connectionReason = 'intersection';
+          }
+          
+          // Connexions définies
+          else if (point1.type === 'connection' || point2.type === 'connection') {
+            shouldConnect = true;
+            connectionReason = 'connexion_definie';
+          }
+          
+          // Connexions de proximité entre pistes différentes (pour traverser)
+          else if (point1.type === 'slope' && point2.type === 'slope' && 
+                   point1.slopeId !== point2.slopeId && distance < 50) {
+            shouldConnect = true;
+            connectionReason = 'proximite_pistes';
+          }
+          
+          // Connexions de proximité entre télésièges
+          else if (point1.type === 'lift' && point2.type === 'lift' && 
+                   point1.liftId !== point2.liftId && distance < 50) {
+            shouldConnect = true;
+            connectionReason = 'proximite_teleliege';
+          }
+          
+          // Connexions mixtes proches
+          else if ((point1.type === 'slope' && point2.type === 'lift') ||
+                   (point1.type === 'lift' && point2.type === 'slope')) {
+            if (distance < 75) {
+              shouldConnect = true;
+              connectionReason = 'proximite_mixte';
+            }
+          }
+        }
+        
+        if (shouldConnect) {
+          graph.get(id1).neighbors.push({
+            id: id2,
+            distance: distance,
+            weight: weight,
+            reason: connectionReason
+          });
+          connectionsCount++;
+          
+          if (connectionsCount <= 20) { // Plus de logs pour debug
+            console.log(`Connexion ${connectionsCount}: ${point1.type}(${point1.slopeName || point1.liftName || 'unknown'}) -> ${point2.type}(${point2.slopeName || point2.liftName || 'unknown'}) [${connectionReason}] ${Math.round(distance)}m`);
+          }
+        }
+      }
+    });
+  });
+  
+  console.log(`Total connexions créées: ${connectionsCount}`);
+  console.log(`Connexions bloquées par difficulté: ${blockedConnections}`);
+  
+  // Debug: vérifier la connectivité du graphe
+  let connectedNodes = 0;
+  graph.forEach((node, nodeId) => {
+    if (node.neighbors.length > 0) {
+      connectedNodes++;
     }
   });
-
-  // Ajouter toutes les remontées au graphe
-  resort.lifts.forEach(lift => {
-    const liftId = lift._id.toString();
-    if (!graph.has(liftId)) {
-      graph.set(liftId, {
-        type: 'lift',
-        name: lift.name,
-        coordinates: lift.coordinates || [],
-        connections: []
-      });
-    }
-
-    // Ajouter les connexions de cette remontée
-    if (lift.connections) {
-      lift.connections.forEach(connection => {
-        // Chercher la piste de destination par nom
-        const targetSlope = resort.slopes.find(s => s.name === connection.name);
-        if (targetSlope) {
-          graph.get(liftId).connections.push({
-            targetId: targetSlope._id.toString(),
-            type: 'lift_to_slope',
-            connectionPoint: connection.coordinates[0] || null
-          });
-        }
-      });
-    }
-  });
-
-  // Ajouter les connexions inverses (pistes vers remontées)
-  resort.lifts.forEach(lift => {
-    const liftId = lift._id.toString();
-    if (lift.connections) {
-      lift.connections.forEach(connection => {
-        const sourceSlope = resort.slopes.find(s => s.name === connection.name);
-        if (sourceSlope && graph.has(sourceSlope._id.toString())) {
-          graph.get(sourceSlope._id.toString()).connections.push({
-            targetId: liftId,
-            type: 'slope_to_lift',
-            connectionPoint: connection.coordinates[0] || null
-          });
-        }
-      });
-    }
-  });
-
+  
+  console.log(`Noeuds connectés: ${connectedNodes}/${graph.size}`);
+  
   return graph;
-};
+}
 
-// Algorithme de Dijkstra pour trouver le chemin le plus court
-const findShortestPath = (graph, startElementId, targetSlopeId, currentLat, currentLng) => {
+// Trouver le point le plus proche (uniquement parmi les points accessibles)
+function findClosestPoint(lat, lng, points, maxDifficulty = null) {
+  let closestPoint = null;
+  let minDistance = Infinity;
+  
+  console.log(`Recherche du point le plus proche de (${lat}, ${lng})`);
+  
+  points.forEach((point) => {
+    if (point.lat === undefined || point.lng === undefined || 
+        isNaN(point.lat) || isNaN(point.lng)) {
+      return;
+    }
+    
+    // Vérifier l'accessibilité du point
+    if (!point.accessible) {
+      return; // Ignorer les points non accessibles
+    }
+    
+    const distance = calculateDistance(lat, lng, point.lat, point.lng);
+    if (distance < minDistance) {
+      minDistance = distance;
+      closestPoint = { ...point, distanceToTarget: distance };
+    }
+  });
+  
+  if (closestPoint) {
+    console.log(`Point le plus proche: ${closestPoint.id} (${closestPoint.slopeName || closestPoint.liftName || 'unknown'}) à ${Math.round(minDistance)}m - Accessible: ${closestPoint.accessible}`);
+  } else {
+    console.error("Aucun point accessible trouvé!");
+  }
+  
+  return closestPoint;
+}
+
+// Algorithme de Dijkstra avec plus de debug
+function findShortestPath(graph, startId, endId) {
   const distances = new Map();
   const previous = new Map();
   const visited = new Set();
   const queue = [];
-
-  // Initialiser les distances
-  for (const [nodeId] of graph) {
-    distances.set(nodeId, Infinity);
+  
+  console.log(`Recherche de chemin de ${startId} vers ${endId}`);
+  
+  // Vérifier que les points existent
+  if (!graph.has(startId)) {
+    console.error(`Point de départ ${startId} non trouvé dans le graphe`);
+    return null;
   }
-
-  // Distance jusqu'à l'élément de départ
-  const startElement = graph.get(startElementId);
-  if (startElement && startElement.coordinates.length > 0) {
-    const startPoint = findNearestPoint(currentLat, currentLng, startElement.coordinates);
-    distances.set(startElementId, startPoint.distance);
-    queue.push({ id: startElementId, distance: startPoint.distance });
+  
+  if (!graph.has(endId)) {
+    console.error(`Point d'arrivée ${endId} non trouvé dans le graphe`);
+    return null;
   }
-
-  while (queue.length > 0) {
-    // Trier pour obtenir le nœud avec la distance minimale
-    queue.sort((a, b) => a.distance - b.distance);
+  
+  // Vérifier la connectivité des points
+  const startNode = graph.get(startId);
+  const endNode = graph.get(endId);
+  
+  console.log(`Point de départ: ${startNode.point.type} - ${startNode.neighbors.length} connexions - Accessible: ${startNode.point.accessible}`);
+  console.log(`Point d'arrivée: ${endNode.point.type} - ${endNode.neighbors.length} connexions - Accessible: ${endNode.point.accessible}`);
+  
+  // Initialisation
+  graph.forEach((_, nodeId) => {
+    distances.set(nodeId, nodeId === startId ? 0 : Infinity);
+    previous.set(nodeId, null);
+  });
+  
+  queue.push(startId);
+  
+  let iterations = 0;
+  const maxIterations = graph.size * 2;
+  
+  while (queue.length > 0 && iterations < maxIterations) {
+    iterations++;
+    
+    // Trier la queue par distance
+    queue.sort((a, b) => distances.get(a) - distances.get(b));
     const current = queue.shift();
     
-    if (visited.has(current.id)) continue;
-    visited.add(current.id);
-
-    if (current.id === targetSlopeId) {
-      break; // Destination atteinte
+    if (visited.has(current)) continue;
+    visited.add(current);
+    
+    if (current === endId) {
+      console.log(`Destination atteinte après ${iterations} itérations`);
+      break;
     }
-
-    const currentNode = graph.get(current.id);
+    
+    const currentNode = graph.get(current);
     if (!currentNode) continue;
-
-    // Explorer les connexions
-    currentNode.connections.forEach(connection => {
-      if (visited.has(connection.targetId)) return;
-
-      const targetNode = graph.get(connection.targetId);
-      if (!targetNode) return;
-
-      // Calculer la distance vers ce nœud
-      let connectionDistance = 0;
-      
-      if (currentNode.coordinates.length > 0 && targetNode.coordinates.length > 0) {
-        let currentExitPoint, targetEntryPoint;
+    
+    currentNode.neighbors.forEach(neighbor => {
+      if (!visited.has(neighbor.id)) {
+        const newDistance = distances.get(current) + neighbor.weight;
         
-        // Déterminer le point de sortie de l'élément actuel
-        if (currentNode.type === 'lift') {
-          // Pour une remontée, on sort par le dernier point (sommet)
-          currentExitPoint = currentNode.coordinates[currentNode.coordinates.length - 1];
-        } else {
-          // Pour une piste, on sort par le dernier point (bas de la piste)
-          currentExitPoint = currentNode.coordinates[currentNode.coordinates.length - 1];
-        }
-        
-        // Déterminer le point d'entrée de l'élément cible
-        if (targetNode.type === 'lift') {
-          // Pour une remontée, on entre par le premier point (bas)
-          targetEntryPoint = targetNode.coordinates[0];
-        } else {
-          // Pour une piste, on entre par le premier point (sommet)
-          targetEntryPoint = targetNode.coordinates[0];
-        }
-        
-        if (connection.connectionPoint) {
-          // Utiliser le point de connexion spécifique
-          connectionDistance = calculateDistance(
-            currentExitPoint.lat, currentExitPoint.lng,
-            connection.connectionPoint.lat, connection.connectionPoint.lng
-          ) + calculateDistance(
-            connection.connectionPoint.lat, connection.connectionPoint.lng,
-            targetEntryPoint.lat, targetEntryPoint.lng
-          );
-        } else {
-          // Distance directe entre point de sortie et point d'entrée
-          connectionDistance = calculateDistance(
-            currentExitPoint.lat, currentExitPoint.lng,
-            targetEntryPoint.lat, targetEntryPoint.lng
-          );
-        }
-      }
-
-      // Ajouter la longueur de l'élément cible
-      if (targetNode.type === 'lift') {
-        // Pour un télésiège, pas de distance supplémentaire car il transporte automatiquement
-        // du premier au dernier point (pas besoin de marcher/skier)
-        connectionDistance += 0;
-      } else {
-        // Pour une piste, ajouter la distance totale de la piste à parcourir
-        for (let i = 0; i < targetNode.coordinates.length - 1; i++) {
-          const coord1 = targetNode.coordinates[i];
-          const coord2 = targetNode.coordinates[i + 1];
-          connectionDistance += calculateDistance(coord1.lat, coord1.lng, coord2.lat, coord2.lng);
-        }
-      }
-
-      const newDistance = distances.get(current.id) + connectionDistance;
-
-      if (newDistance < distances.get(connection.targetId)) {
-        distances.set(connection.targetId, newDistance);
-        previous.set(connection.targetId, current.id);
-        
-        // Ajouter à la queue si pas déjà présent
-        if (!queue.find(item => item.id === connection.targetId)) {
-          queue.push({ id: connection.targetId, distance: newDistance });
+        if (newDistance < distances.get(neighbor.id)) {
+          distances.set(neighbor.id, newDistance);
+          previous.set(neighbor.id, current);
+          
+          if (!queue.includes(neighbor.id)) {
+            queue.push(neighbor.id);
+          }
         }
       }
     });
+    
+    if (iterations % 100 === 0) {
+      console.log(`Itération ${iterations}, queue size: ${queue.length}, visited: ${visited.size}`);
+    }
   }
-
+  
+  console.log(`Algorithme terminé après ${iterations} itérations`);
+  console.log(`Noeuds visités: ${visited.size}/${graph.size}`);
+  console.log(`Distance finale vers destination: ${distances.get(endId)}`);
+  
   // Reconstruire le chemin
   const path = [];
-  let currentId = targetSlopeId;
+  let current = endId;
   
-  while (currentId && previous.has(currentId)) {
-    path.unshift(currentId);
-    currentId = previous.get(currentId);
+  while (current !== null) {
+    path.unshift(current);
+    current = previous.get(current);
   }
   
-  if (currentId) {
-    path.unshift(currentId);
-  }
-
-  return path;
-};
-
-// Fonction pour générer les coordonnées du chemin complet
-const generatePathCoordinates = (graph, path, currentLat, currentLng, nearestElementId) => {
-  const coordinates = [];
+  const pathFound = path.length > 1 && path[0] === startId;
+  console.log(`Chemin ${pathFound ? 'trouvé' : 'non trouvé'}: ${path.length} points`);
   
-  // 1. Ajouter la position actuelle
-  coordinates.push({ lat: parseFloat(currentLat), lng: parseFloat(currentLng) });
-
-  // 2. Aller au point d'entrée le plus proche du premier élément
-  const firstElement = graph.get(nearestElementId);
-  if (firstElement && firstElement.coordinates && firstElement.coordinates.length > 0) {
-    // Déterminer le point d'entrée (début de piste/remontée)
-    let entryPoint;
-    
-    if (firstElement.type === 'slope') {
-      // Pour une piste, l'entrée est le premier point (sommet)
-      entryPoint = firstElement.coordinates[0];
-    } else if (firstElement.type === 'lift') {
-      // Pour une remontée, l'entrée est le premier point (bas de la remontée)
-      entryPoint = firstElement.coordinates[0];
-    }
-    
-    if (entryPoint) {
-      coordinates.push({
-        lat: entryPoint.lat,
-        lng: entryPoint.lng
-      });
-    }
+  if (!pathFound && path.length === 1) {
+    console.log("Le chemin ne contient que le point de départ - aucune connexion trouvée");
+    console.log("Connexions du point de départ:");
+    const startConnections = graph.get(startId);
+    startConnections.neighbors.forEach((neighbor, index) => {
+      const neighborNode = graph.get(neighbor.id);
+      console.log(`  ${index + 1}. ${neighborNode.point.type} - ${neighborNode.point.slopeName || neighborNode.point.liftName || 'unknown'} [${neighbor.reason}] - Accessible: ${neighborNode.point.accessible}`);
+    });
   }
+  
+  return pathFound ? path : null;
+}
 
-  // 3. Suivre le chemin planifié élément par élément
-  for (let i = 0; i < path.length; i++) {
-    const element = graph.get(path[i]);
-    if (!element || !element.coordinates || element.coordinates.length === 0) continue;
-
-    if (element.type === 'lift') {
-      // Pour un télésiège : traitement spécial
-      if (i === 0) {
-        // Si c'est le premier élément du chemin, ajouter toutes les coordonnées pour visualiser le trajet
-        element.coordinates.forEach(coord => {
-          coordinates.push({
-            lat: coord.lat,
-            lng: coord.lng
-          });
-        });
-      } else {
-        // Si on arrive depuis un autre élément, ajouter seulement le point d'arrivée (sommet)
-        // car le télésiège nous transporte automatiquement du bas vers le haut
-        const exitPoint = element.coordinates[element.coordinates.length - 1];
-        coordinates.push({
-          lat: exitPoint.lat,
-          lng: exitPoint.lng
-        });
-      }
-    } else if (element.type === 'slope') {
-      // Pour une piste : ajouter toutes les coordonnées car il faut la descendre
-      if (i === 0) {
-        // Premier élément : ajouter toutes ses coordonnées depuis le début
-        element.coordinates.forEach(coord => {
-          coordinates.push({
-            lat: coord.lat,
-            lng: coord.lng
-          });
-        });
-      } else {
-        // Éléments suivants : ajouter toutes les coordonnées depuis le début
-        element.coordinates.forEach(coord => {
-          coordinates.push({
-            lat: coord.lat,
-            lng: coord.lng
-          });
-        });
-      }
-    }
-  }
-
-  return coordinates;
-};
-
+// Route principale
 router.get('/coordinates/:currentLat/:currentLng/:resortId/:slopeId', async (req, res) => {
   try {
     const { currentLat, currentLng, resortId, slopeId } = req.params;
-    console.log("resortId:", resortId);
-    console.log("slopeId:", slopeId);
-    console.log("Position actuelle:", currentLat, currentLng);
+    const userLat = parseFloat(currentLat);
+    const userLng = parseFloat(currentLng);
+    
+    console.log("=== DÉBUT CALCUL CHEMIN ===");
+    console.log("Position utilisateur:", userLat, userLng);
+    console.log("Resort ID:", resortId);
+    console.log("Slope ID:", slopeId);
 
     const db = getDatabase('France');
     const collection = db.collection('ski_resorts');
@@ -336,119 +428,213 @@ router.get('/coordinates/:currentLat/:currentLng/:resortId/:slopeId', async (req
     if (!resort) {
       return res.status(404).json({ error: "Resort not found" });
     }
-
-    const targetSlope = resort.slopes.find(s => s._id.toString() === slopeId);
+    
+    // Trouver la piste de destination
+    const targetSlope = resort.slopes.find(slope => slope._id.toString() === slopeId);
     if (!targetSlope) {
-      return res.status(404).json({ error: "Slope not found" });
+      return res.status(404).json({ error: "Target slope not found" });
     }
-
-    // Construire le graphe des connexions
-    const graph = buildConnectionGraph(resort);
-    console.log(`Graphe construit avec ${graph.size} éléments`);
-
-    // Trouver l'élément le plus proche de la position actuelle
-    let nearestElement = null;
-    let minDistance = Infinity;
-    let nearestElementId = null;
-
-    for (const [elementId, element] of graph) {
-      if (element.coordinates && element.coordinates.length > 0) {
-        // Pour chaque élément, vérifier la distance au point d'entrée
-        let entryPoint;
-        
-        if (element.type === 'slope') {
-          // Pour une piste, l'entrée est le premier point (sommet de la piste)
-          entryPoint = element.coordinates[0];
-        } else if (element.type === 'lift') {
-          // Pour une remontée, l'entrée est le premier point (départ de la remontée)
-          entryPoint = element.coordinates[0];
+    
+    if (!targetSlope.listCoordinates || targetSlope.listCoordinates.length === 0) {
+      return res.status(400).json({ error: "Target slope has no coordinates" });
+    }
+    
+    console.log(`Piste destination: ${targetSlope.name} (${targetSlope.difficulty})`);
+    console.log(`Limitation de difficulté appliquée: ${targetSlope.difficulty} et moins`);
+    
+    // Construire le réseau de points avec filtrage par difficulté
+    const points = buildNetworkPoints(resort, targetSlope.difficulty);
+    
+    if (points.size === 0) {
+      return res.status(400).json({ error: "No points in network" });
+    }
+    
+    // Construire le graphe avec connexions filtrées par difficulté
+    const graph = buildGraph(points, targetSlope.difficulty);
+    
+    // Trouver le point de départ le plus proche de l'utilisateur (parmi les accessibles)
+    const startPoint = findClosestPoint(userLat, userLng, Array.from(points.values()), targetSlope.difficulty);
+    
+    // Point d'arrivée: début de la piste de destination
+    const destinationCoord = targetSlope.listCoordinates[0];
+    const endPoint = findClosestPoint(destinationCoord.lat, destinationCoord.lng, Array.from(points.values()), targetSlope.difficulty);
+    
+    if (!startPoint || !endPoint) {
+      return res.status(400).json({ 
+        error: "Could not find accessible start or end points",
+        details: {
+          startPointFound: !!startPoint,
+          endPointFound: !!endPoint,
+          maxDifficulty: targetSlope.difficulty
         }
-        
-        if (entryPoint) {
-          const distance = calculateDistance(
-            parseFloat(currentLat), 
-            parseFloat(currentLng), 
-            entryPoint.lat, 
-            entryPoint.lng
-          );
-          
-          if (distance < minDistance) {
-            minDistance = distance;
-            nearestElement = element;
-            nearestElementId = elementId;
+      });
+    }
+    
+    console.log(`Point de départ: ${startPoint.id} - distance: ${Math.round(startPoint.distanceToTarget)}m - Accessible: ${startPoint.accessible}`);
+    console.log(`Point d'arrivée: ${endPoint.id} - distance: ${Math.round(endPoint.distanceToTarget)}m - Accessible: ${endPoint.accessible}`);
+    
+    // Calculer le chemin
+    const path = findShortestPath(graph, startPoint.id, endPoint.id);
+    
+    if (!path) {
+      // Essayer de trouver un chemin alternatif vers n'importe quel point accessible de la piste cible
+      console.log("Tentative de recherche de chemin alternatif...");
+      
+      let alternativePath = null;
+      for (const [pointId, point] of points) {
+        if (point.slopeId && point.slopeId.toString() === slopeId && point.accessible) {
+          console.log(`Tentative vers ${pointId} (accessible: ${point.accessible})`);
+          alternativePath = findShortestPath(graph, startPoint.id, pointId);
+          if (alternativePath) {
+            console.log(`Chemin alternatif trouvé vers ${pointId}`);
+            break;
           }
         }
       }
-    }
-
-    if (!nearestElement) {
-      return res.status(404).json({ error: "No accessible slopes or lifts found" });
-    }
-
-    console.log(`Point d'entrée le plus proche: ${nearestElement.name} (${nearestElement.type}) à ${minDistance.toFixed(2)}m`);
-
-    // Si l'élément le plus proche est déjà la piste de destination
-    if (nearestElementId === slopeId) {
-      console.log("L'entrée la plus proche est déjà la piste de destination");
       
-      // Chemin simple : position actuelle -> entrée de la piste -> piste complète  
-      const coordinates = [
-        { lat: parseFloat(currentLat), lng: parseFloat(currentLng) },
-        { lat: targetSlope.listCoordinates[0].lat, lng: targetSlope.listCoordinates[0].lng }
-      ];
-      
-      // Ajouter toutes les coordonnées de la piste de destination
-      targetSlope.listCoordinates.forEach(coord => {
-        coordinates.push({
-          lat: coord.lat,
-          lng: coord.lng
+      if (!alternativePath) {
+        return res.status(404).json({ 
+          error: "No path found between start and end points with current difficulty restrictions",
+          debug: {
+            startPoint: startPoint.id,
+            endPoint: endPoint.id,
+            maxDifficulty: targetSlope.difficulty,
+            graphSize: graph.size,
+            pointsSize: points.size,
+            accessiblePoints: Array.from(points.values()).filter(p => p.accessible).length
+          }
         });
-      });
+      }
       
-      return res.status(200).json({
-        coordinates,
-        path: [nearestElement.name],
-        totalDistance: minDistance
+      // Utiliser le chemin alternatif
+      path = alternativePath;
+    }
+    
+    console.log(`Chemin trouvé avec ${path.length} points`);
+    
+    // *** LOGGING DÉTAILLÉ DU CHEMIN ***
+    console.log("=== DÉTAIL DU CHEMIN EMPRUNTÉ ===");
+    path.forEach((pointId, index) => {
+      const point = points.get(pointId);
+      if (point) {
+        const pointName = point.slopeName || point.liftName || point.intersectionName || point.connectionName || 'Point inconnu';
+        const pointType = point.type;
+        let direction = '';
+        
+        if (point.type === 'slope') {
+          direction = point.isStart ? '(sommet)' : point.isEnd ? '(bas)' : '(milieu)';
+        } else if (point.type === 'lift') {
+          direction = point.isStart ? '(base)' : point.isEnd ? '(sommet)' : '(milieu)';
+        }
+        
+        const difficultyInfo = point.difficulty ? ` [${point.difficulty}]` : '';
+        const accessibilityInfo = point.accessible ? '✓' : '✗';
+        
+        console.log(`${index + 1}. [${pointType.toUpperCase()}] ${pointName} ${direction}${difficultyInfo} ${accessibilityInfo}`);
+        
+        if (index < path.length - 1) {
+          const nextPoint = points.get(path[index + 1]);
+          if (nextPoint) {
+            const segmentDistance = calculateDistance(point.lat, point.lng, nextPoint.lat, nextPoint.lng);
+            const currentNode = graph.get(pointId);
+            const connection = currentNode.neighbors.find(n => n.id === path[index + 1]);
+            const reason = connection ? connection.reason : 'unknown';
+            console.log(`   ↓ Distance: ${Math.round(segmentDistance)}m [${reason}]`);
+          }
+        }
+      }
+    });
+    console.log("=== FIN DÉTAIL DU CHEMIN ===");
+    
+    // Construire la réponse
+    const coordinates = [];
+    const pathDetails = [];
+    
+    // Position utilisateur
+    coordinates.push({
+      lat: userLat,
+      lng: userLng,
+      type: 'user_position',
+      name: 'Position utilisateur'
+    });
+    
+    // Point de départ dans le réseau
+    if (startPoint.distanceToTarget > 10) {
+      coordinates.push({
+        lat: startPoint.lat,
+        lng: startPoint.lng,
+        type: 'network_start',
+        name: `Entrée réseau: ${startPoint.slopeName || startPoint.liftName || 'Point d\'accès'}`
       });
     }
-
-    // Trouver le chemin le plus court
-    const path = findShortestPath(graph, nearestElementId, slopeId, parseFloat(currentLat), parseFloat(currentLng));
     
-    if (path.length === 0) {
-      return res.status(404).json({ 
-        error: "No path found to destination slope",
-        message: "La piste de destination n'est pas accessible depuis votre position"
-      });
+    // Points du chemin
+    path.forEach((pointId, index) => {
+      const point = points.get(pointId);
+      if (point) {
+        const pointName = point.slopeName || point.liftName || point.intersectionName || point.connectionName || 'Point inconnu';
+        let direction = '';
+        
+        if (point.type === 'slope') {
+          direction = point.isStart ? ' (sommet)' : point.isEnd ? ' (bas)' : '';
+        } else if (point.type === 'lift') {
+          direction = point.isStart ? ' (base)' : point.isEnd ? ' (sommet)' : '';
+        }
+        
+        coordinates.push({
+          lat: point.lat,
+          lng: point.lng,
+          type: 'path_point',
+          pointType: point.type,
+          pointName: pointName,
+          name: `${point.type === 'slope' ? '🎿' : point.type === 'lift' ? '🚡' : '🔗'} ${pointName}${direction}`,
+          difficulty: point.difficulty || null,
+          accessible: point.accessible
+        });
+        
+        pathDetails.push({
+          step: index + 1,
+          type: point.type,
+          name: pointName,
+          difficulty: point.difficulty || null,
+          direction: direction,
+          accessible: point.accessible,
+          coordinates: { lat: point.lat, lng: point.lng }
+        });
+      }
+    });
+    
+    // Calculs de distance
+    let networkDistance = 0;
+    const userToNetworkDistance = startPoint.distanceToTarget;
+    
+    for (let i = 1; i < coordinates.length - 1; i++) {
+      const segmentDistance = calculateDistance(
+        coordinates[i].lat, coordinates[i].lng,
+        coordinates[i + 1].lat, coordinates[i + 1].lng
+      );
+      networkDistance += segmentDistance;
     }
-
-    // Générer les coordonnées du chemin complet
-    const coordinates = generatePathCoordinates(graph, path, parseFloat(currentLat), parseFloat(currentLng), nearestElementId);
     
-    // Créer la liste des noms pour le chemin
-    const pathNames = path.map(elementId => {
-      const element = graph.get(elementId);
-      return element ? `${element.name} (${element.type})` : 'Unknown';
+    const totalDistance = userToNetworkDistance + networkDistance;
+    
+    console.log("=== RÉSUMÉ DU TRAJET ===");
+    console.log(`Limitation de difficulté: ${targetSlope.difficulty} maximum`);
+    pathDetails.forEach((step) => {
+      const accessibilitySymbol = step.accessible ? '✓' : '✗';
+      console.log(`Étape ${step.step}: ${step.type} - ${step.name}${step.direction}${step.difficulty ? ` (${step.difficulty})` : ''} ${accessibilitySymbol}`);
     });
-
-    console.log(`Chemin trouvé: Position actuelle -> ${pathNames.join(' -> ')}`);
-    console.log(`Distance jusqu'au point d'entrée: ${minDistance.toFixed(2)}m`);
-    console.log(`Nombre total de coordonnées: ${coordinates.length}`);
-
-    res.status(200).json({
-      coordinates,
-      path: pathNames,
-      entryPoint: nearestElement.name,
-      distanceToEntry: Math.round(minDistance),
-      totalCoordinates: coordinates.length
+    console.log(`Distance totale: ${Math.round(totalDistance)}m`);
+    console.log("=== FIN CALCUL CHEMIN ===");
+    
+    res.json({
+      coordinates: coordinates,
+      totalDistance: Math.round(totalDistance),
     });
-
+    
   } catch (error) {
-    console.error("Error in GET /coordinates:", error);
-    res.status(500).json({ 
-      error: "Internal Server Error", 
-      message: error.message 
-    });
+    console.error("Error in pathfinding:", error);
+    return res.status(500).json({ error: "Internal server error", details: error.message });
   }
 });
 
