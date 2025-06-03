@@ -474,7 +474,7 @@ router.get('/coordinates/:currentLat/:currentLng/:resortId/:slopeId', async (req
     console.log(`Point d'arrivée: ${endPoint.id} - distance: ${Math.round(endPoint.distanceToTarget)}m - Accessible: ${endPoint.accessible}`);
     
     // Calculer le chemin
-    const path = findShortestPath(graph, startPoint.id, endPoint.id);
+    let path = findShortestPath(graph, startPoint.id, endPoint.id);
     
     if (!path) {
       // Essayer de trouver un chemin alternatif vers n'importe quel point accessible de la piste cible
