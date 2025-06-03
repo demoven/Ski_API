@@ -38,12 +38,9 @@ function createPointId(type, mainId, index = 0) {
 function buildNetworkPoints(resort, maxDifficulty) {
   const points = new Map();
   
-  console.log(`Construction des points du réseau avec difficulté max: ${maxDifficulty}...`);
-  
   // TOUTES les pistes mais marquées comme accessibles ou non
   resort.slopes.forEach(slope => {
     const isAccessible = canUseSlope(maxDifficulty, slope.difficulty);
-    console.log(`Ajout piste ${slope.name} (${slope.difficulty}) - ${isAccessible ? 'ACCESSIBLE' : 'NON ACCESSIBLE'} - ${slope.listCoordinates.length} points`);
     
     // Points de la piste
     slope.listCoordinates.forEach((coord, index) => {
@@ -86,7 +83,6 @@ function buildNetworkPoints(resort, maxDifficulty) {
   // TOUS les télésièges (toujours accessibles)
   resort.lifts.forEach(lift => {
     const liftId = lift._id || lift.name;
-    console.log(`Ajout télesiège ${lift.name} - ${lift.coordinates.length} points`);
     
     lift.coordinates.forEach((coord, index) => {
       const pointId = createPointId('lift', liftId, index);
@@ -125,7 +121,6 @@ function buildNetworkPoints(resort, maxDifficulty) {
     }
   });
   
-  console.log(`Total points créés: ${points.size}`);
   return points;
 }
 
@@ -141,7 +136,7 @@ function buildGraph(points, maxDifficulty) {
     });
   });
   
-  console.log(`Construction des connexions logiques avec difficulté max: ${maxDifficulty}...`);
+
   let connectionsCount = 0;
   let blockedConnections = 0;
   
@@ -162,9 +157,6 @@ function buildGraph(points, maxDifficulty) {
           // Ne pas créer de connexion si l'une des pistes est trop difficile
           if (distance < 100) { // Ne compter que les connexions qui auraient été créées
             blockedConnections++;
-            if (blockedConnections <= 10) {
-              console.log(`CONNEXION BLOQUÉE: ${point1.type}(${point1.slopeName || point1.liftName || 'unknown'}) -> ${point2.type}(${point2.slopeName || point2.liftName || 'unknown'}) - Difficulté trop élevée`);
-            }
           }
           return; // Ignorer cette connexion
         }
@@ -246,16 +238,10 @@ function buildGraph(points, maxDifficulty) {
           });
           connectionsCount++;
           
-          if (connectionsCount <= 20) { // Plus de logs pour debug
-            console.log(`Connexion ${connectionsCount}: ${point1.type}(${point1.slopeName || point1.liftName || 'unknown'}) -> ${point2.type}(${point2.slopeName || point2.liftName || 'unknown'}) [${connectionReason}] ${Math.round(distance)}m`);
-          }
         }
       }
     });
   });
-  
-  console.log(`Total connexions créées: ${connectionsCount}`);
-  console.log(`Connexions bloquées par difficulté: ${blockedConnections}`);
   
   // Debug: vérifier la connectivité du graphe
   let connectedNodes = 0;
@@ -265,8 +251,6 @@ function buildGraph(points, maxDifficulty) {
     }
   });
   
-  console.log(`Noeuds connectés: ${connectedNodes}/${graph.size}`);
-  
   return graph;
 }
 
@@ -274,8 +258,6 @@ function buildGraph(points, maxDifficulty) {
 function findClosestPoint(lat, lng, points, maxDifficulty = null) {
   let closestPoint = null;
   let minDistance = Infinity;
-  
-  console.log(`Recherche du point le plus proche de (${lat}, ${lng})`);
   
   points.forEach((point) => {
     if (point.lat === undefined || point.lng === undefined || 
@@ -295,12 +277,6 @@ function findClosestPoint(lat, lng, points, maxDifficulty = null) {
     }
   });
   
-  if (closestPoint) {
-    console.log(`Point le plus proche: ${closestPoint.id} (${closestPoint.slopeName || closestPoint.liftName || 'unknown'}) à ${Math.round(minDistance)}m - Accessible: ${closestPoint.accessible}`);
-  } else {
-    console.error("Aucun point accessible trouvé!");
-  }
-  
   return closestPoint;
 }
 
@@ -311,26 +287,15 @@ function findShortestPath(graph, startId, endId) {
   const visited = new Set();
   const queue = [];
   
-  console.log(`Recherche de chemin de ${startId} vers ${endId}`);
-  
   // Vérifier que les points existent
   if (!graph.has(startId)) {
-    console.error(`Point de départ ${startId} non trouvé dans le graphe`);
     return null;
   }
   
   if (!graph.has(endId)) {
-    console.error(`Point d'arrivée ${endId} non trouvé dans le graphe`);
     return null;
   }
-  
-  // Vérifier la connectivité des points
-  const startNode = graph.get(startId);
-  const endNode = graph.get(endId);
-  
-  console.log(`Point de départ: ${startNode.point.type} - ${startNode.neighbors.length} connexions - Accessible: ${startNode.point.accessible}`);
-  console.log(`Point d'arrivée: ${endNode.point.type} - ${endNode.neighbors.length} connexions - Accessible: ${endNode.point.accessible}`);
-  
+
   // Initialisation
   graph.forEach((_, nodeId) => {
     distances.set(nodeId, nodeId === startId ? 0 : Infinity);
@@ -353,7 +318,6 @@ function findShortestPath(graph, startId, endId) {
     visited.add(current);
     
     if (current === endId) {
-      console.log(`Destination atteinte après ${iterations} itérations`);
       break;
     }
     
@@ -374,16 +338,7 @@ function findShortestPath(graph, startId, endId) {
         }
       }
     });
-    
-    if (iterations % 100 === 0) {
-      console.log(`Itération ${iterations}, queue size: ${queue.length}, visited: ${visited.size}`);
-    }
   }
-  
-  console.log(`Algorithme terminé après ${iterations} itérations`);
-  console.log(`Noeuds visités: ${visited.size}/${graph.size}`);
-  console.log(`Distance finale vers destination: ${distances.get(endId)}`);
-  
   // Reconstruire le chemin
   const path = [];
   let current = endId;
@@ -394,15 +349,11 @@ function findShortestPath(graph, startId, endId) {
   }
   
   const pathFound = path.length > 1 && path[0] === startId;
-  console.log(`Chemin ${pathFound ? 'trouvé' : 'non trouvé'}: ${path.length} points`);
   
   if (!pathFound && path.length === 1) {
-    console.log("Le chemin ne contient que le point de départ - aucune connexion trouvée");
-    console.log("Connexions du point de départ:");
     const startConnections = graph.get(startId);
     startConnections.neighbors.forEach((neighbor, index) => {
       const neighborNode = graph.get(neighbor.id);
-      console.log(`  ${index + 1}. ${neighborNode.point.type} - ${neighborNode.point.slopeName || neighborNode.point.liftName || 'unknown'} [${neighbor.reason}] - Accessible: ${neighborNode.point.accessible}`);
     });
   }
   
@@ -415,11 +366,6 @@ router.get('/coordinates/:currentLat/:currentLng/:resortId/:slopeId', async (req
     const { currentLat, currentLng, resortId, slopeId } = req.params;
     const userLat = parseFloat(currentLat);
     const userLng = parseFloat(currentLng);
-    
-    console.log("=== DÉBUT CALCUL CHEMIN ===");
-    console.log("Position utilisateur:", userLat, userLng);
-    console.log("Resort ID:", resortId);
-    console.log("Slope ID:", slopeId);
 
     const db = getDatabase('France');
     const collection = db.collection('ski_resorts');
@@ -438,9 +384,6 @@ router.get('/coordinates/:currentLat/:currentLng/:resortId/:slopeId', async (req
     if (!targetSlope.listCoordinates || targetSlope.listCoordinates.length === 0) {
       return res.status(400).json({ error: "Target slope has no coordinates" });
     }
-    
-    console.log(`Piste destination: ${targetSlope.name} (${targetSlope.difficulty})`);
-    console.log(`Limitation de difficulté appliquée: ${targetSlope.difficulty} et moins`);
     
     // Construire le réseau de points avec filtrage par difficulté
     const points = buildNetworkPoints(resort, targetSlope.difficulty);
@@ -469,24 +412,16 @@ router.get('/coordinates/:currentLat/:currentLng/:resortId/:slopeId', async (req
         }
       });
     }
-    
-    console.log(`Point de départ: ${startPoint.id} - distance: ${Math.round(startPoint.distanceToTarget)}m - Accessible: ${startPoint.accessible}`);
-    console.log(`Point d'arrivée: ${endPoint.id} - distance: ${Math.round(endPoint.distanceToTarget)}m - Accessible: ${endPoint.accessible}`);
-    
     // Calculer le chemin
     let path = findShortestPath(graph, startPoint.id, endPoint.id);
     
     if (!path) {
       // Essayer de trouver un chemin alternatif vers n'importe quel point accessible de la piste cible
-      console.log("Tentative de recherche de chemin alternatif...");
-      
       let alternativePath = null;
       for (const [pointId, point] of points) {
         if (point.slopeId && point.slopeId.toString() === slopeId && point.accessible) {
-          console.log(`Tentative vers ${pointId} (accessible: ${point.accessible})`);
           alternativePath = findShortestPath(graph, startPoint.id, pointId);
           if (alternativePath) {
-            console.log(`Chemin alternatif trouvé vers ${pointId}`);
             break;
           }
         }
@@ -509,42 +444,6 @@ router.get('/coordinates/:currentLat/:currentLng/:resortId/:slopeId', async (req
       // Utiliser le chemin alternatif
       path = alternativePath;
     }
-    
-    console.log(`Chemin trouvé avec ${path.length} points`);
-    
-    // *** LOGGING DÉTAILLÉ DU CHEMIN ***
-    console.log("=== DÉTAIL DU CHEMIN EMPRUNTÉ ===");
-    path.forEach((pointId, index) => {
-      const point = points.get(pointId);
-      if (point) {
-        const pointName = point.slopeName || point.liftName || point.intersectionName || point.connectionName || 'Point inconnu';
-        const pointType = point.type;
-        let direction = '';
-        
-        if (point.type === 'slope') {
-          direction = point.isStart ? '(sommet)' : point.isEnd ? '(bas)' : '(milieu)';
-        } else if (point.type === 'lift') {
-          direction = point.isStart ? '(base)' : point.isEnd ? '(sommet)' : '(milieu)';
-        }
-        
-        const difficultyInfo = point.difficulty ? ` [${point.difficulty}]` : '';
-        const accessibilityInfo = point.accessible ? '✓' : '✗';
-        
-        console.log(`${index + 1}. [${pointType.toUpperCase()}] ${pointName} ${direction}${difficultyInfo} ${accessibilityInfo}`);
-        
-        if (index < path.length - 1) {
-          const nextPoint = points.get(path[index + 1]);
-          if (nextPoint) {
-            const segmentDistance = calculateDistance(point.lat, point.lng, nextPoint.lat, nextPoint.lng);
-            const currentNode = graph.get(pointId);
-            const connection = currentNode.neighbors.find(n => n.id === path[index + 1]);
-            const reason = connection ? connection.reason : 'unknown';
-            console.log(`   ↓ Distance: ${Math.round(segmentDistance)}m [${reason}]`);
-          }
-        }
-      }
-    });
-    console.log("=== FIN DÉTAIL DU CHEMIN ===");
     
     // Construire la réponse
     const coordinates = [];
@@ -618,22 +517,12 @@ router.get('/coordinates/:currentLat/:currentLng/:resortId/:slopeId', async (req
     
     const totalDistance = userToNetworkDistance + networkDistance;
     
-    console.log("=== RÉSUMÉ DU TRAJET ===");
-    console.log(`Limitation de difficulté: ${targetSlope.difficulty} maximum`);
-    pathDetails.forEach((step) => {
-      const accessibilitySymbol = step.accessible ? '✓' : '✗';
-      console.log(`Étape ${step.step}: ${step.type} - ${step.name}${step.direction}${step.difficulty ? ` (${step.difficulty})` : ''} ${accessibilitySymbol}`);
-    });
-    console.log(`Distance totale: ${Math.round(totalDistance)}m`);
-    console.log("=== FIN CALCUL CHEMIN ===");
-    
     res.json({
       coordinates: coordinates,
       totalDistance: Math.round(totalDistance),
     });
     
   } catch (error) {
-    console.error("Error in pathfinding:", error);
     return res.status(500).json({ error: "Internal server error", details: error.message });
   }
 });
