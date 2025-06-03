@@ -217,6 +217,24 @@ app.delete('/questions/delete/:element', isAdmin, async (req, res) => {
   }
 });
 
+app.get('/questions', async (req, res) => {
+  try {
+    const questions = await getDbData('questions');
+    if (!questions) return res.status(404).json({ error: 'Aucune question trouvée' });
+
+    // Convert questions object to array
+    const questionList = Object.keys(questions).map(key => ({
+      element: key,
+      ...questions[key]
+    }));
+
+    res.json(questionList);
+  } catch (error) {
+    handleError(res, 'Erreur lors de la récupération des questions', error);
+  }
+}
+);
+
 // Update a question
 app.put('/questions/update/:element', isAdmin, async (req, res) => {
   try {
