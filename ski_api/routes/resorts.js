@@ -38,144 +38,123 @@ const getSlopeStats = async (resortId, slopeId) => {
     return null;
   }
 };
+
 // Fonction améliorée pour calculer le score de pertinence d'une piste
 const calculateSlopeRelevance = (slope, userProfile, slopeStats) => {
-  let score = 0;
-  let factorCount = 0;
-
-  // Si pas de statistiques, se baser principalement sur le niveau utilisateur
-  if (!slopeStats || slopeStats.totalNumber === 0) {
-    // Score par défaut basé sur la difficulté
-    const difficultyOrder = { 'Vert': 4, 'Bleu': 3, 'Rouge': 2, 'Noir': 1 };
-    let defaultScore = difficultyOrder[slope.difficulty] || 2.5;
-
-    // Si le profil utilisateur existe avec un niveau, donner priorité à la correspondance niveau/difficulté
-    if (userProfile && userProfile.level) {
-      const userLevel = userProfile.level.toLowerCase();
-      const slopeDifficulty = slope.difficulty;
-
-      const levelMapping = {
-        'vert': {
-          'Vert': 5.0,     // Parfait - augmenté pour donner priorité
-          'Bleu': 3.0,     // Acceptable pour progresser - augmenté
-          'Rouge': 1.0,    // Trop difficile mais possible
-          'Noir': 0.5      // Dangereux mais listé
-        },
-        'bleu': {
-          'Vert': 3.0,     // Un peu facile
-          'Bleu': 5.0,     // Parfait - augmenté
-          'Rouge': 3.5,    // Bon défi - augmenté
-          'Noir': 2.0      // Encore difficile mais possible
-        },
-        'rouge': {
-          'Vert': 1.5,     // Trop facile
-          'Bleu': 3.0,     // Facile
-          'Rouge': 5.0,    // Parfait - augmenté
-          'Noir': 4.0      // Bon défi - augmenté
-        },
-        'noire': {
-          'Vert': 1.0,     // Beaucoup trop facile
-          'Bleu': 2.0,     // Trop facile
-          'Rouge': 4.0,    // Bon niveau
-          'Noir': 5.0      // Parfait - augmenté
-        }
-      };
-
-      if (levelMapping[userLevel] && levelMapping[userLevel][slopeDifficulty] !== undefined) {
-        // Remplacer le score par défaut par le score basé sur le niveau
-        return levelMapping[userLevel][slopeDifficulty];
-      }
-    }
-
-    return defaultScore;
-  }
-
-  // 1. Score de base basé sur la note moyenne générale (poids: 1.0)
-  if (slopeStats.ratingAvg && slopeStats.totalNumber > 0) {
-    score += slopeStats.ratingAvg;
-    factorCount += 1.0;
-  }
-
-  // 2. Bonus basé sur les préférences utilisateur similaires (poids: 0.8)
-  if (userProfile && slopeStats) {
-    Object.entries(userProfile).forEach(([key, value]) => {
-      if (slopeStats[key] && slopeStats[key][value]) {
-        const prefStat = slopeStats[key][value];
-        if (prefStat.count > 0) {
-          // Pondération basée sur le nombre d'avis similaires
-          const confidence = Math.min(prefStat.count / 3, 1); // Confiance max à 3 avis
-          const weight = confidence * 0.8;
-          score += prefStat.avg * weight;
-          factorCount += weight;
-        }
-      }
-    });
-  }
-
-  // 3. Correspondance niveau utilisateur / difficulté piste (poids: 1.2)
+  // ÉTAPE 1: Score de base selon le niveau utilisateur (facteur principal)
+  let baseScore = 2.5; // Score par défaut
+  
   if (userProfile && userProfile.level) {
     const userLevel = userProfile.level.toLowerCase();
     const slopeDifficulty = slope.difficulty;
-    let difficultyScore = 0;
 
+    // Mapping avec des scores qui priorisent fortement le niveau correspondant
     const levelMapping = {
       'vert': {
-        'Vert': 2.0,    // Parfait
-        'Bleu': 0.5,    // Acceptable pour progresser
-        'Rouge': -1.5,  // Trop difficile
-        'Noir': -2.0    // Dangereux
+        'Vert': 10.0,    // Parfait - score très élevé
+        'Bleu': 7.0,     // Acceptable pour progresser
+        'Rouge': 3.0,    // Trop difficile mais possible
+        'Noir': 1.0      // Dangereux
       },
       'bleu': {
-        'Vert': 0.3,    // Un peu facile
-        'Bleu': 2.0,    // Parfait
-        'Rouge': 1.0,   // Bon défi
-        'Noir': -0.8    // Encore difficile
+        'Vert': 6.0,     // Un peu facile mais ok
+        'Bleu': 10.0,    // Parfait - score très élevé
+        'Rouge': 8.0,    // Bon défi
+        'Noir': 4.0      // Difficile mais possible
       },
       'rouge': {
-        'Vert': -0.5,   // Trop facile
-        'Bleu': -0.2,   // Facile
-        'Rouge': 1.5,   // Bien
-        'Noir': 2.0     // Parfait
+        'Vert': 3.0,     // Trop facile
+        'Bleu': 6.0,     // Facile
+        'Rouge': 10.0,   // Parfait - score très élevé
+        'Noir': 9.0      // Bon défi
       },
       'noir': {
-        'Vert': -0.5,
-        'Bleu': -0.2,
-        'Rouge': 1.5,
-        'Noir': 2.0
+        'Vert': 2.0,     // Beaucoup trop facile
+        'Bleu': 4.0,     // Trop facile
+        'Rouge': 8.0,    // Bon niveau
+        'Noir': 10.0     // Parfait - score très élevé
+      },
+      'noire': { // Alias pour 'noir'
+        'Vert': 2.0,
+        'Bleu': 4.0,
+        'Rouge': 8.0,
+        'Noir': 10.0
       }
     };
 
     if (levelMapping[userLevel] && levelMapping[userLevel][slopeDifficulty] !== undefined) {
-      difficultyScore = levelMapping[userLevel][slopeDifficulty];
-      // Augmenter le poids lorsqu'il y a peu d'avis (inversement proportionnel)
-      const levelWeight = 1.2 + (3 / Math.max(slopeStats.totalNumber, 1)) * 0.8;
-      score += difficultyScore * levelWeight;
-      factorCount += levelWeight;
+      baseScore = levelMapping[userLevel][slopeDifficulty];
+    }
+  } else {
+    // Si pas de profil utilisateur, ordre par défaut des difficultés
+    const difficultyOrder = { 'Vert': 8, 'Bleu': 6, 'Rouge': 4, 'Noir': 2 };
+    baseScore = difficultyOrder[slope.difficulty] || 5;
+  }
+
+  // ÉTAPE 2: Ajustements fins (facteurs secondaires)
+  let adjustmentScore = 0;
+  let adjustmentCount = 0;
+
+  // Si pas de statistiques, retourner le score de base
+  if (!slopeStats || slopeStats.totalNumber === 0) {
+    return Math.max(0, Math.min(15, baseScore)); // Plafond à 15
+  }
+
+  // 2.1 Ajustement basé sur la note moyenne (petit impact)
+  if (slopeStats.ratingAvg && slopeStats.totalNumber > 0) {
+    // Convertir la note sur 5 en ajustement sur 2 points max
+    const ratingAdjustment = ((slopeStats.ratingAvg - 2.5) / 2.5) * 2;
+    adjustmentScore += ratingAdjustment;
+    adjustmentCount += 1;
+  }
+
+  // 2.2 Ajustement basé sur les préférences utilisateur similaires
+  if (userProfile && slopeStats) {
+    let preferenceBonuses = 0;
+    let preferenceCount = 0;
+
+    Object.entries(userProfile).forEach(([key, value]) => {
+      if (key !== 'level' && slopeStats[key] && slopeStats[key][value]) {
+        const prefStat = slopeStats[key][value];
+        if (prefStat.count > 0) {
+          // Bonus/malus basé sur la note des utilisateurs similaires
+          const preferenceAdjustment = ((prefStat.avg - 2.5) / 2.5) * 1.5;
+          const confidence = Math.min(prefStat.count / 3, 1);
+          preferenceBonuses += preferenceAdjustment * confidence;
+          preferenceCount++;
+        }
+      }
+    });
+
+    if (preferenceCount > 0) {
+      adjustmentScore += preferenceBonuses / preferenceCount;
+      adjustmentCount += 0.5; // Poids réduit
     }
   }
 
-  // 4. Bonus de popularité avec courbe logarithmique (poids: 0.3)
+  // 2.3 Bonus de popularité (très faible impact)
   if (slopeStats.totalNumber > 0) {
-    const popularityScore = Math.log(slopeStats.totalNumber + 1) * 0.15;
-    score += popularityScore;
-    factorCount += 0.3;
+    const popularityBonus = Math.log(slopeStats.totalNumber + 1) * 0.1;
+    adjustmentScore += popularityBonus;
+    adjustmentCount += 0.2;
   }
 
-  // 5. Malus pour les pistes avec très peu d'avis (moins de 3)
-  if (slopeStats.totalNumber > 0 && slopeStats.totalNumber < 3) {
-    score -= 0.5; // Légère pénalité pour manque de données
-  }
-
-  // 6. Bonus pour les pistes très bien notées (>= 4.0)
+  // 2.4 Bonus pour les pistes très bien notées
   if (slopeStats.ratingAvg >= 4.0) {
-    score += 0.3;
+    adjustmentScore += 0.5;
   }
 
-  // Normalisation finale
-  const finalScore = factorCount > 0 ? score / Math.max(factorCount, 1) : 2.5;
+  // 2.5 Malus pour les pistes avec très peu d'avis
+  if (slopeStats.totalNumber > 0 && slopeStats.totalNumber < 3) {
+    adjustmentScore -= 0.3;
+  }
+
+  // ÉTAPE 3: Calcul du score final
+  const finalAdjustment = adjustmentCount > 0 ? adjustmentScore / adjustmentCount : 0;
+  const finalScore = baseScore + Math.max(-2, Math.min(2, finalAdjustment)); // Limiter l'ajustement à ±2
 
   // S'assurer que le score reste dans une plage raisonnable
-  return Math.max(0, Math.min(5, finalScore));
+  return Math.max(0, Math.min(15, finalScore));
 };
 
 async function isAdmin(req, res, next) {
@@ -253,6 +232,7 @@ router.get('/names', async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
+
 router.get('/:name', async (req, res) => {
   try {
     const db = getDatabase('France');
@@ -320,15 +300,24 @@ router.get('/:name', async (req, res) => {
         })
       );
 
-      // Tri par score de pertinence décroissant, puis par note moyenne
+      // Tri par score de pertinence décroissant
       resortWithoutSlopesAndLifts.slopes = slopesWithRelevance.sort((a, b) => {
-        if (Math.abs(a.relevanceScore - b.relevanceScore) < 0.1) {
-          // Si les scores sont très proches, trier par note moyenne
-          const avgA = a.stats?.ratingAvg || 0;
-          const avgB = b.stats?.ratingAvg || 0;
+        // Tri principal par score de pertinence
+        if (Math.abs(a.relevanceScore - b.relevanceScore) > 0.1) {
+          return b.relevanceScore - a.relevanceScore;
+        }
+        
+        // En cas d'égalité, trier par note moyenne
+        const avgA = a.stats?.ratingAvg || 0;
+        const avgB = b.stats?.ratingAvg || 0;
+        if (Math.abs(avgA - avgB) > 0.1) {
           return avgB - avgA;
         }
-        return b.relevanceScore - a.relevanceScore;
+        
+        // En dernier recours, trier par nombre d'avis
+        const countA = a.stats?.totalNumber || 0;
+        const countB = b.stats?.totalNumber || 0;
+        return countB - countA;
       });
 
       console.log('Ordre final des pistes:', resortWithoutSlopesAndLifts.slopes.map(s =>
